@@ -1,0 +1,1 @@
+ALTER TABLE licenses ADD COLUMN is_trial INTEGER DEFAULT 0;

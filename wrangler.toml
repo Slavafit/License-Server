@@ -1,0 +1,8 @@
+name = "license-server"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "license-db"
+database_id = "3018f38d-d669-4781-a5a2-e49879be82e9"
