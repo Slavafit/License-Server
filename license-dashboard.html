@@ -1,222 +1,86 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>License Manager</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f8f8f7;--surface:#fff;--surface-1:#f1f0ec;
+  --border:rgba(0,0,0,0.1);--border-strong:rgba(0,0,0,0.18);
+  --text:#1a1a1a;--text-s:#6b6b68;--text-m:#9b9b97;
+  --accent:#185fa5;--accent-bg:#e6f1fb;
+  --success:#3b6d11;--success-bg:#eaf3de;
+  --warning:#854f0b;--warning-bg:#faeeda;
+  --danger:#a32d2d;--danger-bg:#fcebeb;
+  --radius:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1a1a18;--surface:#242422;--surface-1:#2e2e2b;
+  --border:rgba(255,255,255,0.1);--border-strong:rgba(255,255,255,0.18);
+  --text:#f0f0ec;--text-s:#a0a09c;--text-m:#6b6b68;
+  --accent:#85b7eb;--accent-bg:#042c53;
+  --success:#c0dd97;--success-bg:#173404;
+  --warning:#fac775;--warning-bg:#412402;
+  --danger:#f09595;--danger-bg:#501313;
+}}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:var(--surface);border-bottom:0.5px solid var(--border);padding:0 16px;height:52px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:10}
+.header h1{font-size:15px;font-weight:500;flex:1}
+.header .ti{font-size:18px;color:var(--accent)}
+.main{max-width:800px;margin:0 auto;padding:16px}
+.card{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:.875rem 1rem;margin-bottom:1rem}
+.card h3{font-size:14px;font-weight:500;margin-bottom:.75rem;display:flex;align-items:center;gap:6px;color:var(--text-s)}
+.settings-grid{display:flex;flex-direction:column;gap:8px}
+.field label{display:block;font-size:12px;color:var(--text-s);margin-bottom:4px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:1rem}
+.stat{background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:.625rem .75rem}
+.stat-label{font-size:11px;color:var(--text-s);margin-bottom:2px}
+.stat-val{font-size:20px;font-weight:500}
+.form-col{display:flex;flex-direction:column;gap:8px}
+.filters{display:flex;flex-direction:column;gap:8px;margin-bottom:1rem}
+.filters-row{display:flex;gap:8px}
+input,select{width:100%;height:40px;padding:0 12px;border:0.5px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:14px;font-family:inherit;outline:none;-webkit-appearance:none}
+input:focus,select:focus{border-color:var(--accent)}
+input[type=number]{-moz-appearance:textfield}
+button{height:40px;padding:0 14px;border:0.5px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:14px;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;transition:background .1s;-webkit-tap-highlight-color:transparent}
+button:active{transform:scale(.97);background:var(--surface-1)}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary:active{opacity:.9;background:var(--accent)}
+.btn-full{width:100%}
+.btn-success{border-color:var(--success);color:var(--success)}
+.btn-danger{border-color:var(--danger);color:var(--danger)}
+.btn-sm{height:32px;padding:0 10px;font-size:13px}
 
-  :root {
-    --bg: #f8f8f7;
-    --surface: #ffffff;
-    --surface-1: #f1f0ec;
-    --border: rgba(0,0,0,0.1);
-    --border-strong: rgba(0,0,0,0.18);
-    --text: #1a1a1a;
-    --text-secondary: #6b6b68;
-    --text-muted: #9b9b97;
-    --accent: #185fa5;
-    --accent-bg: #e6f1fb;
-    --success: #3b6d11;
-    --success-bg: #eaf3de;
-    --warning: #854f0b;
-    --warning-bg: #faeeda;
-    --danger: #a32d2d;
-    --danger-bg: #fcebeb;
-    --radius: 8px;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #1a1a18;
-      --surface: #242422;
-      --surface-1: #2e2e2b;
-      --border: rgba(255,255,255,0.1);
-      --border-strong: rgba(255,255,255,0.18);
-      --text: #f0f0ec;
-      --text-secondary: #a0a09c;
-      --text-muted: #6b6b68;
-      --accent: #85b7eb;
-      --accent-bg: #042c53;
-      --success: #c0dd97;
-      --success-bg: #173404;
-      --warning: #fac775;
-      --warning-bg: #412402;
-      --danger: #f09595;
-      --danger-bg: #501313;
-    }
-  }
-
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 14px;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-  }
-
-  .header {
-    background: var(--surface);
-    border-bottom: 0.5px solid var(--border);
-    padding: 0 24px;
-    height: 56px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    position: sticky;
-    top: 0;
-    z-index: 10;
-  }
-
-  .header h1 {
-    font-size: 16px;
-    font-weight: 500;
-    flex: 1;
-  }
-
-  .header .ti { font-size: 20px; color: var(--accent); }
-
-  .main { max-width: 1200px; margin: 0 auto; padding: 24px; }
-
-  /* Settings panel */
-  .settings-panel {
-    background: var(--surface);
-    border: 0.5px solid var(--border);
-    border-radius: 12px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 1.25rem;
-    display: none;
-  }
-  .settings-panel h3 { font-size: 14px; font-weight: 500; margin-bottom: .75rem; color: var(--text-secondary); }
-  .settings-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
-  .field label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
-
-  /* Stats */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 1.25rem; }
-  .stat { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--radius); padding: .75rem 1rem; }
-  .stat-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
-  .stat-val { font-size: 24px; font-weight: 500; }
-
-  /* Create form */
-  .create-form {
-    background: var(--surface);
-    border: 0.5px solid var(--border);
-    border-radius: 12px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 1.25rem;
-  }
-  .create-form h3 { font-size: 15px; font-weight: 500; margin-bottom: .75rem; }
-  .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px; align-items: end; }
-
-  /* Filters */
-  .filters { display: flex; gap: 8px; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
-  .filters label { font-size: 13px; color: var(--text-secondary); }
-
-  /* Form elements */
-  input, select {
-    width: 100%;
-    height: 36px;
-    padding: 0 10px;
-    border: 0.5px solid var(--border-strong);
-    border-radius: var(--radius);
-    background: var(--surface);
-    color: var(--text);
-    font-size: 13px;
-    font-family: inherit;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-  input:focus, select:focus { border-color: var(--accent); }
-  input[type=password] { letter-spacing: 2px; }
-
-  button {
-    height: 36px;
-    padding: 0 14px;
-    border: 0.5px solid var(--border-strong);
-    border-radius: var(--radius);
-    background: var(--surface);
-    color: var(--text);
-    font-size: 13px;
-    font-family: inherit;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-    transition: background 0.1s;
-  }
-  button:hover { background: var(--surface-1); }
-  button:active { transform: scale(0.98); }
-  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .btn-primary:hover { opacity: .9; background: var(--accent); }
-  .btn-success { border-color: var(--success); color: var(--success); }
-  .btn-danger  { border-color: var(--danger);  color: var(--danger); }
-
-  /* Table */
-  .table-wrap {
-    background: var(--surface);
-    border: 0.5px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-  table { width: 100%; border-collapse: collapse; }
-  th {
-    text-align: left;
-    padding: 10px 12px;
-    color: var(--text-secondary);
-    border-bottom: 0.5px solid var(--border);
-    font-weight: 500;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-  }
-  td { padding: 10px 12px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: var(--surface-1); }
-
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 20px;
-    font-size: 11px;
-    font-weight: 500;
-  }
-  .badge-active  { background: var(--success-bg); color: var(--success); }
-  .badge-revoked { background: var(--danger-bg);  color: var(--danger); }
-  .badge-pending { background: var(--warning-bg); color: var(--warning); }
-  .badge-app     { background: var(--accent-bg);  color: var(--accent); }
-
-  .mono { font-family: 'Courier New', monospace; font-size: 11px; color: var(--text-secondary); }
-
-  .actions { display: flex; gap: 6px; }
-  .actions button { height: 28px; padding: 0 8px; font-size: 12px; }
-
-  .copy-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--text-muted);
-    padding: 2px 4px;
-    font-size: 12px;
-    height: auto;
-  }
-  .copy-btn:hover { color: var(--accent); background: none; }
-
-  /* Message */
-  .msg {
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    font-size: 13px;
-    margin-bottom: 1rem;
-    display: none;
-  }
-  .msg-ok  { background: var(--success-bg); color: var(--success); }
-  .msg-err { background: var(--danger-bg);  color: var(--danger); }
-
-  .empty { text-align: center; padding: 2.5rem; color: var(--text-muted); }
-  .spinner { text-align: center; padding: 2rem; color: var(--text-muted); }
+/* Карточки вместо таблицы */
+.lic-list{display:flex;flex-direction:column;gap:10px}
+.lic-card{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:.875rem 1rem}
+.lic-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px}
+.lic-email{font-weight:500;font-size:14px;word-break:break-all}
+.lic-meta{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--text-s);margin-bottom:10px}
+.lic-meta-row{display:flex;gap:6px;align-items:center}
+.lic-meta-row .ti{font-size:14px;color:var(--text-m)}
+.lic-actions{display:flex;gap:8px}
+.lic-actions button{flex:1}
+.mono{font-family:'Courier New',monospace;font-size:11px;color:var(--text-m)}
+.copy-btn{background:none;border:none;cursor:pointer;color:var(--text-m);padding:2px 4px;font-size:13px;height:auto;display:inline-flex;align-items:center}
+.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:500}
+.badge-active{background:var(--success-bg);color:var(--success)}
+.badge-revoked{background:var(--danger-bg);color:var(--danger)}
+.badge-pending{background:var(--warning-bg);color:var(--warning)}
+.badge-trial{background:var(--accent-bg);color:var(--accent)}
+.badge-expired{background:var(--danger-bg);color:var(--danger)}
+.badge-app{background:var(--accent-bg);color:var(--accent);font-size:11px}
+.msg{padding:10px 14px;border-radius:var(--radius);font-size:13px;margin-bottom:1rem;display:none}
+.msg-ok{background:var(--success-bg);color:var(--success)}
+.msg-err{background:var(--danger-bg);color:var(--danger)}
+.empty{text-align:center;padding:2rem;color:var(--text-m);font-size:14px}
+.expires-warn{color:var(--warning)}
+.expires-expired{color:var(--danger)}
+.hint{font-size:12px;color:var(--text-m);margin-top:3px}
+.divider{height:0.5px;background:var(--border);margin:8px 0}
 </style>
 </head>
 <body>
@@ -224,17 +88,17 @@
 <div class="header">
   <i class="ti ti-license"></i>
   <h1>License Manager</h1>
-  <button onclick="toggleSetup()" id="cfg-btn"><i class="ti ti-settings"></i> Settings</button>
+  <button onclick="toggleSetup()" id="cfg-btn" style="border:none;background:none;padding:4px"><i class="ti ti-settings" style="font-size:20px;color:var(--text-s)"></i></button>
 </div>
 
 <div class="main">
 
-  <div class="settings-panel" id="cfg-panel">
-    <h3>Connection settings</h3>
-    <div class="settings-row">
-      <div class="field"><label>Worker URL</label><input id="cfg-url" placeholder="https://license-server.xxx.workers.dev" /></div>
-      <div class="field"><label>Admin key</label><input id="cfg-key" type="password" placeholder="AdminKey2025" /></div>
-      <button class="btn-primary" onclick="saveConfig()"><i class="ti ti-check"></i> Save</button>
+  <div class="card" id="cfg-panel" style="display:none">
+    <h3><i class="ti ti-settings"></i> Settings</h3>
+    <div class="settings-grid">
+      <div class="field"><label>Worker URL</label><input id="cfg-url" placeholder="https://license-server.xxx.workers.dev"/></div>
+      <div class="field"><label>Admin key</label><input id="cfg-key" type="password" placeholder="AdminKey2025"/></div>
+      <button class="btn-primary btn-full" onclick="saveConfig()"><i class="ti ti-check"></i> Save & Connect</button>
     </div>
   </div>
 
@@ -243,246 +107,285 @@
   <div class="stats">
     <div class="stat"><div class="stat-label">Total</div><div class="stat-val" id="s-total">—</div></div>
     <div class="stat"><div class="stat-label" style="color:var(--success)">Active</div><div class="stat-val" id="s-active" style="color:var(--success)">—</div></div>
+    <div class="stat"><div class="stat-label" style="color:var(--accent)">Trial</div><div class="stat-val" id="s-trial" style="color:var(--accent)">—</div></div>
     <div class="stat"><div class="stat-label" style="color:var(--warning)">Pending</div><div class="stat-val" id="s-pending" style="color:var(--warning)">—</div></div>
     <div class="stat"><div class="stat-label" style="color:var(--danger)">Revoked</div><div class="stat-val" id="s-revoked" style="color:var(--danger)">—</div></div>
+    <div class="stat"><div class="stat-label" style="color:var(--danger)">Expired</div><div class="stat-val" id="s-expired" style="color:var(--danger)">—</div></div>
   </div>
 
-  <div class="create-form">
+  <div class="card">
     <h3><i class="ti ti-plus"></i> Create license</h3>
-    <div class="form-row">
-      <div class="field"><label>Email</label><input id="f-email" placeholder="user@example.com" /></div>
-      <div class="field"><label>Device ID</label><input id="f-device" placeholder="android_device_id" /></div>
-      <div class="field"><label>App ID</label><input id="f-app" value="worktrack" /></div>
-      <div style="display:flex;align-items:flex-end"><button class="btn-success" onclick="createLicense()"><i class="ti ti-plus"></i> Create</button></div>
+    <div class="form-col">
+      <div class="field"><label>Email</label><input id="f-email" placeholder="user@example.com" type="email"/></div>
+      <div class="field"><label>Device ID</label><input id="f-device" placeholder="android_device_id"/></div>
+      <div class="filters-row">
+        <div class="field" style="flex:1"><label>App ID</label><input id="f-app" value="worktrack"/></div>
+      <div class="field" style="flex:1"><label>App Name</label><input id="f-appname" placeholder="WorkTrack"/></div>
+        <div class="field" style="flex:1">
+          <label>Days</label>
+          <input id="f-days" type="number" min="1" placeholder="3 (default)"/>
+          <div class="hint">Empty = 3 days (default)</div>
+        </div>
+      </div>
+      <button class="btn-success btn-full" onclick="createLicense()"><i class="ti ti-plus"></i> Create License</button>
     </div>
   </div>
 
   <div class="filters">
-    <label>Filter:</label>
-    <input id="filter-email" placeholder="Email..." oninput="renderTable()" style="max-width:200px" />
-    <select id="filter-status" onchange="renderTable()" style="max-width:150px">
-      <option value="">All statuses</option>
-      <option value="active">Active</option>
-      <option value="pending">Pending</option>
-      <option value="revoked">Revoked</option>
-    </select>
-    <select id="filter-app" onchange="renderTable()" style="max-width:150px">
-      <option value="">All apps</option>
-    </select>
-    <button onclick="loadLicenses()" style="margin-left:auto"><i class="ti ti-refresh"></i> Refresh</button>
+    <div class="filters-row">
+      <input id="filter-email" placeholder="Search by email..." oninput="renderList()" style="flex:1"/>
+      <button onclick="loadLicenses()" style="width:40px;padding:0;flex-shrink:0"><i class="ti ti-refresh"></i></button>
+    </div>
+    <div class="filters-row">
+      <select id="filter-status" onchange="renderList()" style="flex:1">
+        <option value="">All statuses</option>
+        <option value="active">Active</option>
+        <option value="trial">Trial</option>
+        <option value="pending">Pending</option>
+        <option value="revoked">Revoked</option>
+        <option value="expired">Expired</option>
+      </select>
+      <select id="filter-app" onchange="renderList()" style="flex:1">
+        <option value="">All apps</option>
+      </select>
+    </div>
   </div>
 
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Email</th>
-          <th>App</th>
-          <th>Device ID</th>
-          <th>Token</th>
-          <th>Status</th>
-          <th>Created</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="tbl"><tr><td colspan="7" class="empty">Configure settings to load licenses</td></tr></tbody>
-    </table>
+  <div id="lic-list" class="lic-list">
+    <div class="empty">Configure settings to load licenses</div>
   </div>
 
 </div>
 
 <script>
-let licenses = [];
-let cfg = { url: '', key: '' };
+let licenses=[];
+let cfg={url:'',key:''};
 
-function loadConfig() {
-  try { cfg = JSON.parse(localStorage.getItem('lic_cfg') || '{}'); } catch(e) {}
-  if (cfg.url) document.getElementById('cfg-url').value = cfg.url;
-  if (cfg.key) document.getElementById('cfg-key').value = cfg.key;
+function loadConfig(){
+  try{cfg.url=localStorage.getItem('lic_url')||'';}catch(e){}
+  if(!cfg.url&&location.protocol.startsWith('http')) cfg.url=location.origin;
+  if(cfg.url) document.getElementById('cfg-url').value=cfg.url;
 }
 
-function saveConfig() {
-  cfg.url = document.getElementById('cfg-url').value.trim().replace(/\/$/, '');
-  cfg.key = document.getElementById('cfg-key').value.trim();
-  try { localStorage.setItem('lic_cfg', JSON.stringify(cfg)); } catch(e) {}
-  document.getElementById('cfg-panel').style.display = 'none';
-  document.getElementById('cfg-btn').innerHTML = '<i class="ti ti-settings"></i> Settings';
-  showMsg('Settings saved', 'ok');
+function saveConfig(){
+  cfg.url=document.getElementById('cfg-url').value.trim().replace(/\/$/,'');
+  cfg.key=document.getElementById('cfg-key').value.trim();
+  try{localStorage.setItem('lic_url',cfg.url);}catch(e){}
+  document.getElementById('cfg-panel').style.display='none';
+  document.getElementById('cfg-btn').innerHTML='<i class="ti ti-settings" style="font-size:20px;color:var(--text-s)"></i>';
+  showMsg('Connected!','ok');
   loadLicenses();
 }
 
-function toggleSetup() {
-  const p = document.getElementById('cfg-panel');
-  const btn = document.getElementById('cfg-btn');
-  const shown = p.style.display !== 'none';
-  p.style.display = shown ? 'none' : 'block';
-  btn.innerHTML = shown
-    ? '<i class="ti ti-settings"></i> Settings'
-    : '<i class="ti ti-x"></i> Close';
+function toggleSetup(){
+  const p=document.getElementById('cfg-panel');
+  const shown=p.style.display!=='none';
+  p.style.display=shown?'none':'block';
+  document.getElementById('cfg-btn').innerHTML=shown
+    ?'<i class="ti ti-settings" style="font-size:20px;color:var(--text-s)"></i>'
+    :'<i class="ti ti-x" style="font-size:20px;color:var(--text-s)"></i>';
 }
 
-function showMsg(txt, type) {
-  const el = document.getElementById('msg');
-  el.textContent = txt;
-  el.className = 'msg msg-' + (type === 'ok' ? 'ok' : 'err');
-  el.style.display = 'block';
-  setTimeout(() => el.style.display = 'none', 3500);
+function showMsg(txt,type){
+  const el=document.getElementById('msg');
+  el.textContent=txt;
+  el.className='msg msg-'+(type==='ok'?'ok':'err');
+  el.style.display='block';
+  setTimeout(()=>el.style.display='none',3000);
 }
 
-async function api(path, method = 'GET', body = null) {
-  if (!cfg.url) { showMsg('Set Worker URL in Settings first', 'err'); throw new Error('no url'); }
-  const opts = {
-    method,
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Key': cfg.key }
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(cfg.url + path, opts);
+async function api(path,method='GET',body=null){
+  if(!cfg.url){showMsg('Set Worker URL in Settings','err');throw new Error('no url');}
+  const opts={method,headers:{'Content-Type':'application/json','X-Admin-Key':cfg.key}};
+  if(body) opts.body=JSON.stringify(body);
+  const r=await fetch(cfg.url+path,opts);
   return r.json();
 }
 
-async function loadLicenses() {
-  document.getElementById('tbl').innerHTML = '<tr><td colspan="7" class="spinner"><i class="ti ti-loader"></i> Loading...</td></tr>';
-  try {
-    const data = await api('/admin/licenses');
-    if (!data.ok) { showMsg(data.error || 'Error', 'err'); return; }
-    licenses = data.licenses || [];
+async function loadLicenses(){
+  document.getElementById('lic-list').innerHTML='<div class="empty"><i class="ti ti-loader"></i> Loading...</div>';
+  try{
+    const data=await api('/admin/licenses');
+    if(!data.ok){showMsg(data.error||'Error','err');return;}
+    licenses=data.licenses||[];
     updateStats();
     updateAppFilter();
-    renderTable();
-  } catch(e) {
-    showMsg('Connection error: ' + e.message, 'err');
-    document.getElementById('tbl').innerHTML = '<tr><td colspan="7" class="empty">Connection failed. Check settings.</td></tr>';
+    renderList();
+  }catch(e){
+    showMsg('Connection error: '+e.message,'err');
+    document.getElementById('lic-list').innerHTML='<div class="empty">Connection failed. Check settings.</div>';
   }
 }
 
-function updateStats() {
-  const active  = licenses.filter(l => l.is_active && l.token).length;
-  const pending = licenses.filter(l => !l.is_active && !l.token).length;
-  const revoked = licenses.filter(l => !l.is_active && l.token).length;
-  document.getElementById('s-total').textContent   = licenses.length;
-  document.getElementById('s-active').textContent  = active;
-  document.getElementById('s-pending').textContent = pending;
-  document.getElementById('s-revoked').textContent = revoked;
+function nowSec(){return Math.floor(Date.now()/1000);}
+
+function escapeHtml(value){
+  return String(value??'').replace(/[&<>"']/g,ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  })[ch]);
 }
 
-function updateAppFilter() {
-  const apps = [...new Set(licenses.map(l => l.app_id))];
-  const sel = document.getElementById('filter-app');
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">All apps</option>';
-  apps.forEach(a => {
-    const o = document.createElement('option');
-    o.value = a; o.textContent = a;
-    sel.appendChild(o);
-  });
-  if (cur) sel.value = cur;
+function getStatus(l){
+  if(!l.is_active) return 'revoked';
+  if(l.expires_at&&l.expires_at<nowSec()) return 'expired';
+  if(l.is_trial) return 'trial';
+  return 'active';
 }
 
-function getStatus(l) {
-  if (!l.token) return 'pending';
-  return l.is_active ? 'active' : 'revoked';
+function updateStats(){
+  const c={active:0,trial:0,pending:0,revoked:0,expired:0};
+  licenses.forEach(l=>{const s=getStatus(l);if(c[s]!==undefined)c[s]++;});
+  document.getElementById('s-total').textContent=licenses.length;
+  document.getElementById('s-active').textContent=c.active;
+  document.getElementById('s-trial').textContent=c.trial;
+  document.getElementById('s-pending').textContent=c.pending;
+  document.getElementById('s-revoked').textContent=c.revoked;
+  document.getElementById('s-expired').textContent=c.expired;
 }
 
-function renderTable() {
-  const email  = document.getElementById('filter-email').value.toLowerCase();
-  const status = document.getElementById('filter-status').value;
-  const app    = document.getElementById('filter-app').value;
+function updateAppFilter(){
+  const apps=[...new Set(licenses.map(l=>l.app_id))];
+  const sel=document.getElementById('filter-app');
+  const cur=sel.value;
+  sel.innerHTML='<option value="">All apps</option>';
+  apps.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;sel.appendChild(o);});
+  if(cur) sel.value=cur;
+}
 
-  const rows = licenses.filter(l => {
-    if (email  && !l.email.toLowerCase().includes(email)) return false;
-    if (status && getStatus(l) !== status) return false;
-    if (app    && l.app_id !== app) return false;
+function formatExpires(l){
+  if(!l.expires_at) return '<span style="color:var(--text-m)">Perpetual</span>';
+  const date=new Date(l.expires_at*1000).toLocaleDateString();
+  const daysLeft=Math.ceil((l.expires_at-nowSec())/86400);
+  if(daysLeft<0) return `<span class="expires-expired"><i class="ti ti-alert-circle"></i> Expired ${date}</span>`;
+  if(daysLeft<=7) return `<span class="expires-warn"><i class="ti ti-clock"></i> ${date} (${daysLeft}d left)</span>`;
+  return `<span>${date}</span>`;
+}
+
+function renderList(){
+  const email=document.getElementById('filter-email').value.toLowerCase();
+  const status=document.getElementById('filter-status').value;
+  const app=document.getElementById('filter-app').value;
+
+  const rows=licenses.filter(l=>{
+    if(email&&!l.email.toLowerCase().includes(email)) return false;
+    if(status&&getStatus(l)!==status) return false;
+    if(app&&l.app_id!==app) return false;
     return true;
   });
 
-  const tbody = document.getElementById('tbl');
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">No licenses found</td></tr>';
-    return;
-  }
+  const container=document.getElementById('lic-list');
+  if(!rows.length){container.innerHTML='<div class="empty">No licenses found</div>';return;}
 
-  tbody.innerHTML = rows.map(l => {
-    const st = getStatus(l);
-    const badge = `<span class="badge badge-${st}">${st}</span>`;
-    const date = l.created_at ? new Date(l.created_at * 1000).toLocaleDateString('ru-RU') : '—';
-    const tokenShort = l.token ? l.token.substring(0, 14) + '…' : '—';
-    const copyBtn = l.token
-      ? `<button class="copy-btn" onclick="copyToken('${l.token}')" title="Copy token"><i class="ti ti-copy"></i></button>`
-      : '';
+  container.innerHTML=rows.map(l=>{
+    const st=getStatus(l);
+    const tokenShort=l.token_last4?'••••'+l.token_last4:'-';
 
-    let actions = '';
-    if (st === 'active') {
-      actions = `<button class="btn-danger" onclick="revoke('${l.token}')"><i class="ti ti-ban"></i> Revoke</button>`;
-    } else if (st === 'revoked') {
-      actions = `<button class="btn-success" onclick="restore('${l.token}')"><i class="ti ti-refresh"></i> Restore</button>`;
-    } else {
-      actions = `<button class="btn-success" onclick="activatePending('${l.email}','${l.device_id}','${l.app_id}')"><i class="ti ti-check"></i> Activate</button>`;
+    let actions='';
+    if(st==='active'||st==='trial'){
+      actions=`<button class="btn-danger btn-sm" onclick="revoke(${Number(l.id)})"><i class="ti ti-ban"></i> Revoke</button> <button class="btn-success btn-sm" onclick="extendLicense(${Number(l.id)})"><i class="ti ti-calendar-plus"></i> Extend</button>`;
+    } else if(st==='expired'){
+      actions=`
+        <button class="btn-danger btn-sm" onclick="revoke(${Number(l.id)})"><i class="ti ti-ban"></i> Revoke</button>
+        <button class="btn-success btn-sm" onclick="extendLicense(${Number(l.id)})"><i class="ti ti-calendar-plus"></i> Extend</button>`;
+    } else if(st==='revoked'){
+      actions=`<button class="btn-success btn-sm" onclick="restore(${Number(l.id)})"><i class="ti ti-refresh"></i> Restore</button>`;
+    } else if(st==='pending'){
+      actions=`<button class="btn-success btn-sm" onclick="activatePending(${Number(l.id)})"><i class="ti ti-check"></i> Activate</button>`;
     }
 
-    return `<tr>
-      <td>${l.email}</td>
-      <td><span class="badge badge-app">${l.app_id}</span></td>
-      <td class="mono">${(l.device_id || '').substring(0, 16)}…</td>
-      <td class="mono">${tokenShort}${copyBtn}</td>
-      <td>${badge}</td>
-      <td>${date}</td>
-      <td><div class="actions">${actions}</div></td>
-    </tr>`;
+    return `<div class="lic-card">
+      <div class="lic-top">
+        <div class="lic-email">${escapeHtml(l.email)}</div>
+        <span class="badge badge-${st}">${st}</span>
+      </div>
+      <div class="lic-meta">
+        <div class="lic-meta-row"><i class="ti ti-apps"></i><span class="badge badge-app">${escapeHtml(l.app_id)}</span>${l.app_name?` <span style="color:var(--text-s);font-size:13px">${escapeHtml(l.app_name)}</span>`:''}</div>
+        <div class="lic-meta-row"><i class="ti ti-calendar"></i>${formatExpires(l)}</div>
+        <div class="lic-meta-row"><i class="ti ti-key"></i><span class="mono">${escapeHtml(tokenShort)}</span></div>
+        <div class="lic-meta-row"><i class="ti ti-clock"></i><span style="color:var(--text-m)">${l.created_at?new Date(l.created_at*1000).toLocaleDateString():'-'}</span></div>
+      </div>
+      ${actions?`<div class="divider"></div><div class="lic-actions">${actions}</div>`:''}
+    </div>`;
   }).join('');
 }
 
-async function revoke(token) {
-  if (!confirm('Revoke this license?')) return;
-  try {
-    const d = await api('/admin/revoke', 'POST', { token });
-    if (d.ok) { showMsg('License revoked', 'ok'); loadLicenses(); }
-    else showMsg(d.error || 'Error', 'err');
-  } catch(e) { showMsg(e.message, 'err'); }
+async function revoke(id){
+  if(!confirm('Revoke this license?')) return;
+  try{
+    const d=await api('/admin/revoke','POST',{id});
+    if(d.ok){showMsg('License revoked','ok');loadLicenses();}
+    else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
 }
 
-async function restore(token) {
-  try {
-    const d = await api('/admin/restore', 'POST', { token });
-    if (d.ok) { showMsg('License restored', 'ok'); loadLicenses(); }
-    else showMsg(d.error || 'Error', 'err');
-  } catch(e) { showMsg(e.message, 'err'); }
+async function restore(id){
+  try{
+    const d=await api('/admin/restore','POST',{id});
+    if(d.ok){showMsg('License restored','ok');loadLicenses();}
+    else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
 }
 
-async function activatePending(email, device_id, app_id) {
-  try {
-    const d = await api('/admin/create', 'POST', { email, device_id, app_id });
-    if (d.ok) { showMsg('License activated', 'ok'); loadLicenses(); }
-    else showMsg(d.error || 'Error', 'err');
-  } catch(e) { showMsg(e.message, 'err'); }
+async function activatePending(id){
+  const l=licenses.find(item=>Number(item.id)===Number(id));
+  if(!l) return;
+  const days=prompt('License duration in days (empty = perpetual):');
+  const body={email:l.email,device_id:l.device_id,app_id:l.app_id,app_name:l.app_name||''};
+  if(days&&!isNaN(days)) body.expires_days=parseInt(days);
+  try{
+    const d=await api('/admin/create','POST',body);
+    if(d.ok){showMsg('Activated!','ok');loadLicenses();}
+    else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
 }
 
-async function createLicense() {
-  const email  = document.getElementById('f-email').value.trim();
-  const device = document.getElementById('f-device').value.trim();
-  const app    = document.getElementById('f-app').value.trim();
-  if (!email || !device || !app) { showMsg('Fill all fields', 'err'); return; }
-  try {
-    const d = await api('/admin/create', 'POST', { email, device_id: device, app_id: app });
-    if (d.ok) {
-      showMsg('Created: ' + d.token.substring(0, 16) + '…', 'ok');
-      document.getElementById('f-email').value = '';
-      document.getElementById('f-device').value = '';
+async function extendLicense(id){
+  const l=licenses.find(item=>Number(item.id)===Number(id));
+  if(!l) return;
+  const days=prompt('Extend by how many days?','365');
+  if(!days||isNaN(days)) return;
+  try{
+    const d=await api('/admin/create','POST',{email:l.email,device_id:l.device_id,app_id:l.app_id,app_name:l.app_name||'',expires_days:parseInt(days)});
+    if(d.ok){showMsg('Extended!','ok');loadLicenses();}
+    else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
+}
+
+async function createLicense(){
+  const email=document.getElementById('f-email').value.trim();
+  const device=document.getElementById('f-device').value.trim();
+  const app=document.getElementById('f-app').value.trim();
+  const appname=document.getElementById('f-appname').value.trim();
+  const days=document.getElementById('f-days').value.trim();
+  if(!email||!device||!app){showMsg('Fill email, device ID and app ID','err');return;}
+  const body={email,device_id:device,app_id:app,app_name:appname};
+  if(days&&!isNaN(days)) body.expires_days=parseInt(days);
+  try{
+    const d=await api('/admin/create','POST',body);
+    if(d.ok){
+      showMsg('License created!','ok');
+      document.getElementById('f-email').value='';
+      document.getElementById('f-device').value='';
+      document.getElementById('f-days').value='';
       loadLicenses();
-    } else showMsg(d.error || 'Error', 'err');
-  } catch(e) { showMsg(e.message, 'err'); }
+    } else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
 }
 
-function copyToken(token) {
+function copyToken(token){
   navigator.clipboard.writeText(token)
-    .then(() => showMsg('Token copied to clipboard', 'ok'))
-    .catch(() => showMsg('Copy failed', 'err'));
+    .then(()=>showMsg('Token copied','ok'))
+    .catch(()=>showMsg('Copy failed','err'));
 }
 
 loadConfig();
-if (cfg.url && cfg.key) loadLicenses();
-else {
-  document.getElementById('cfg-panel').style.display = 'block';
-  document.getElementById('cfg-btn').innerHTML = '<i class="ti ti-x"></i> Close';
+if(cfg.url){
+  document.getElementById('cfg-url').value=cfg.url;
+}
+if(cfg.url&&cfg.key) loadLicenses();
+else{
+  document.getElementById('cfg-panel').style.display='block';
+  document.getElementById('cfg-btn').innerHTML='<i class="ti ti-x" style="font-size:20px;color:var(--text-s)"></i>';
 }
 </script>
 </body>

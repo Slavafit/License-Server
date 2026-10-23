@@ -1,6 +1,16 @@
 name = "license-server"
-main = "src/index.ts"
-compatibility_date = "2024-01-01"
+main = "src/secure.ts"
+# Newest date supported by the currently installed Wrangler/workerd runtime.
+compatibility_date = "2026-07-13"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
 
 [[d1_databases]]
 binding = "DB"

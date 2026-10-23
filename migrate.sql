@@ -1,1 +1,2 @@
-ALTER TABLE licenses ADD COLUMN is_trial INTEGER DEFAULT 0;
+-- Добавить поле app_name
+ALTER TABLE licenses ADD COLUMN app_name TEXT DEFAULT '';

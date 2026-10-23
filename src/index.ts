@@ -1,9 +1,11 @@
+export { default } from "./secure";
+
+/* Legacy implementation retained only because this checkout does not allow deleting
+   the previously tracked file. Wrangler uses src/secure.ts.
 export interface Env {
   DB: D1Database;
   ADMIN_KEY: string;
 }
-
-// ── Утилиты ──────────────────────────────────────────────────────────────────
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -22,7 +24,6 @@ function err(message: string, status = 400): Response {
   return json({ ok: false, error: message }, status);
 }
 
-/** Генерация случайного токена (64 hex символа) */
 async function generateToken(): Promise<string> {
   const buf = new Uint8Array(32);
   crypto.getRandomValues(buf);
@@ -38,38 +39,27 @@ function checkAdmin(request: Request, env: Env): boolean {
   return key === env.ADMIN_KEY;
 }
 
-// ── Роутер ───────────────────────────────────────────────────────────────────
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
 
-    // CORS preflight
     if (method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, X-Admin-Key",
-        },
-      });
+      return new Response(null, { headers: CORS });
     }
 
     try {
-      // Публичные эндпоинты
       if (method === "POST" && path === "/activate") return activate(request, env);
       if (method === "POST" && path === "/verify")   return verify(request, env);
 
-      // Админские эндпоинты
       if (!checkAdmin(request, env)) return err("Unauthorized", 401);
 
-      if (method === "POST" && path === "/admin/create")       return adminCreate(request, env);
-      if (method === "POST" && path === "/admin/revoke")       return adminRevoke(request, env);
-      if (method === "POST" && path === "/admin/restore")      return adminRestore(request, env);
-      if (method === "GET"  && path === "/admin/licenses")     return adminList(request, env);
-      if (method === "GET"  && path === "/admin/apps")         return adminApps(request, env);
+      if (method === "POST" && path === "/admin/create")   return adminCreate(request, env);
+      if (method === "POST" && path === "/admin/revoke")   return adminRevoke(request, env);
+      if (method === "POST" && path === "/admin/restore")  return adminRestore(request, env);
+      if (method === "GET"  && path === "/admin/licenses") return adminList(request, env);
+      if (method === "GET"  && path === "/admin/apps")     return adminApps(request, env);
 
       return err("Not found", 404);
     } catch (e: any) {
@@ -79,9 +69,10 @@ export default {
 };
 
 // ── POST /activate ────────────────────────────────────────────────────────────
-// Тело: { email, device_id, app_id }
-// Если лицензия уже существует для этого device+app — возвращает существующий токен
-// Если нет лицензии — создаёт неактивную запись (ждёт подтверждения через /admin/create)
+// Новое устройство → сразу выдаём триал на 3 дня
+// Существующая запись → возвращаем текущий статус
+
+const TRIAL_DAYS = 3;
 
 async function activate(request: Request, env: Env): Promise<Response> {
   const body: any = await request.json().catch(() => null);
@@ -89,30 +80,36 @@ async function activate(request: Request, env: Env): Promise<Response> {
     return err("email, device_id and app_id are required");
   }
 
-  const { email, device_id, app_id } = body;
+  const { email, device_id, app_id, app_name = '' } = body;
 
-  // Проверяем — есть ли уже активная лицензия для этого устройства+приложения
   const existing = await env.DB.prepare(
-    "SELECT token, is_active, expires_at FROM licenses WHERE device_id = ? AND app_id = ? LIMIT 1"
-  ).bind(device_id, app_id).first<{ token: string; is_active: number; expires_at: number | null }>();
+    "SELECT token, is_active, expires_at, is_trial FROM licenses WHERE device_id = ? AND app_id = ? LIMIT 1"
+  ).bind(device_id, app_id).first<{ token: string; is_active: number; expires_at: number | null; is_trial: number }>();
 
   if (existing) {
     if (!existing.is_active) return json({ ok: false, error: "License revoked" }, 403);
-    if (existing.expires_at && existing.expires_at < now()) return json({ ok: false, error: "License expired" }, 403);
-    return json({ ok: true, token: existing.token, status: "active" });
+    if (existing.expires_at && existing.expires_at < now()) {
+      return json({ ok: false, error: "Trial expired", reason: "trial_expired" }, 403);
+    }
+    return json({
+      ok: true,
+      token: existing.token,
+      status: existing.is_trial ? "trial" : "active",
+      expires_at: existing.expires_at,
+    });
   }
 
-  // Создаём запись со статусом is_active=0 (ожидает активации администратором)
+  // Новое устройство — выдаём триал на 3 дня
   const token = await generateToken();
+  const expires_at = now() + TRIAL_DAYS * 86400;
   await env.DB.prepare(
-    "INSERT INTO licenses (email, device_id, app_id, token, is_active, created_at) VALUES (?, ?, ?, ?, 0, ?)"
-  ).bind(email, device_id, app_id, token, now()).run();
+    "INSERT INTO licenses (email, device_id, app_id, app_name, token, is_active, is_trial, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)"
+  ).bind(email, device_id, app_id, app_name, token, expires_at, now()).run();
 
-  return json({ ok: false, status: "pending", message: "License request received. Contact developer to activate." }, 202);
+  return json({ ok: true, token, status: "trial", expires_at });
 }
 
 // ── POST /verify ──────────────────────────────────────────────────────────────
-// Тело: { token, device_id, app_id }
 
 async function verify(request: Request, env: Env): Promise<Response> {
   const body: any = await request.json().catch(() => null);
@@ -123,20 +120,24 @@ async function verify(request: Request, env: Env): Promise<Response> {
   const { token, device_id, app_id } = body;
 
   const row = await env.DB.prepare(
-    "SELECT is_active, expires_at, device_id FROM licenses WHERE token = ? AND app_id = ? LIMIT 1"
-  ).bind(token, app_id).first<{ is_active: number; expires_at: number | null; device_id: string }>();
+    "SELECT is_active, expires_at, device_id, is_trial FROM licenses WHERE token = ? AND app_id = ? LIMIT 1"
+  ).bind(token, app_id).first<{ is_active: number; expires_at: number | null; device_id: string; is_trial: number }>();
 
   if (!row) return json({ ok: false, valid: false, reason: "not_found" });
   if (!row.is_active) return json({ ok: false, valid: false, reason: "revoked" });
-  if (row.expires_at && row.expires_at < now()) return json({ ok: false, valid: false, reason: "expired" });
+  if (row.expires_at && row.expires_at < now()) return json({ ok: false, valid: false, reason: "trial_expired" });
   if (row.device_id !== device_id) return json({ ok: false, valid: false, reason: "device_mismatch" });
 
-  return json({ ok: true, valid: true });
+  return json({
+    ok: true,
+    valid: true,
+    status: row.is_trial ? "trial" : "active",
+    expires_at: row.expires_at,
+  });
 }
 
 // ── POST /admin/create ────────────────────────────────────────────────────────
-// Тело: { email, device_id, app_id, expires_days? }
-// Создаёт активную лицензию (или активирует pending)
+// Создаёт полную лицензию (снимает триал, убирает expires_at)
 
 async function adminCreate(request: Request, env: Env): Promise<Response> {
   const body: any = await request.json().catch(() => null);
@@ -144,33 +145,31 @@ async function adminCreate(request: Request, env: Env): Promise<Response> {
     return err("email, device_id and app_id are required");
   }
 
-  const { email, device_id, app_id, expires_days } = body;
-  const expires_at = expires_days ? now() + expires_days * 86400 : null;
+  const { email, device_id, app_id, app_name = '', expires_days } = body;
+  // По умолчанию 3 дня если expires_days не передан
+  const days = expires_days ?? TRIAL_DAYS;
+  const expires_at = days ? now() + days * 86400 : null;
 
-  // Проверяем pending запись
-  const pending = await env.DB.prepare(
+  const existing = await env.DB.prepare(
     "SELECT id, token FROM licenses WHERE device_id = ? AND app_id = ? LIMIT 1"
   ).bind(device_id, app_id).first<{ id: number; token: string }>();
 
-  if (pending) {
-    // Активируем существующую
+  if (existing) {
     await env.DB.prepare(
-      "UPDATE licenses SET is_active = 1, expires_at = ?, email = ? WHERE id = ?"
-    ).bind(expires_at, email, pending.id).run();
-    return json({ ok: true, token: pending.token, action: "activated" });
+      "UPDATE licenses SET is_active = 1, is_trial = 0, expires_at = ?, email = ?, app_name = ? WHERE id = ?"
+    ).bind(expires_at, email, app_name, existing.id).run();
+    return json({ ok: true, token: existing.token, action: "activated" });
   }
 
-  // Создаём новую активную
   const token = await generateToken();
   await env.DB.prepare(
-    "INSERT INTO licenses (email, device_id, app_id, token, is_active, expires_at, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)"
-  ).bind(email, device_id, app_id, token, expires_at, now()).run();
+    "INSERT INTO licenses (email, device_id, app_id, app_name, token, is_active, is_trial, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)"
+  ).bind(email, device_id, app_id, app_name, token, expires_at, now()).run();
 
   return json({ ok: true, token, action: "created" });
 }
 
 // ── POST /admin/revoke ────────────────────────────────────────────────────────
-// Тело: { token } или { device_id, app_id }
 
 async function adminRevoke(request: Request, env: Env): Promise<Response> {
   const body: any = await request.json().catch(() => null);
@@ -188,7 +187,6 @@ async function adminRevoke(request: Request, env: Env): Promise<Response> {
 }
 
 // ── POST /admin/restore ───────────────────────────────────────────────────────
-// Тело: { token }
 
 async function adminRestore(request: Request, env: Env): Promise<Response> {
   const body: any = await request.json().catch(() => null);
@@ -199,15 +197,14 @@ async function adminRestore(request: Request, env: Env): Promise<Response> {
 }
 
 // ── GET /admin/licenses ───────────────────────────────────────────────────────
-// Query params: app_id?, email?, active?
 
 async function adminList(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const app_id = url.searchParams.get("app_id");
   const email  = url.searchParams.get("email");
-  const active = url.searchParams.get("active"); // "1" или "0"
+  const active = url.searchParams.get("active");
 
-  let query = "SELECT id, email, device_id, app_id, token, is_active, expires_at, created_at FROM licenses WHERE 1=1";
+  let query = "SELECT id, email, device_id, app_id, app_name, token, is_active, is_trial, expires_at, created_at FROM licenses WHERE 1=1";
   const params: any[] = [];
 
   if (app_id) { query += " AND app_id = ?"; params.push(app_id); }
@@ -221,7 +218,6 @@ async function adminList(request: Request, env: Env): Promise<Response> {
 }
 
 // ── GET /admin/apps ───────────────────────────────────────────────────────────
-// Статистика по приложениям
 
 async function adminApps(request: Request, env: Env): Promise<Response> {
   const rows = await env.DB.prepare(
@@ -229,3 +225,4 @@ async function adminApps(request: Request, env: Env): Promise<Response> {
   ).all();
   return json({ ok: true, apps: rows.results });
 }
+*/
