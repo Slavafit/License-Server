@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function warehouseAccess(warehouseId) {
+      return request.auth != null
+        && request.auth.token.keys().hasAll([
+          'warehouse_id', 'license_active', 'license_expires_at'
+        ])
+        && request.auth.token.warehouse_id is string
+        && request.auth.token.warehouse_id.size() > 0
+        && request.auth.token.warehouse_id == warehouseId
+        && request.auth.token.license_active == true
+        && request.auth.token.license_expires_at is int
+        && (request.auth.token.license_expires_at == 0
+          || request.time.toMillis() < request.auth.token.license_expires_at * 1000);
+    }
+
+    match /warehouses/{warehouseId}/{document=**} {
+      allow read, write: if warehouseAccess(warehouseId);
+    }
+
+    // Temporary compatibility for historical root documents, not subcollections.
+    match /shipments/{shipmentId} {
+      allow read: if warehouseAccess('es-main');
+      allow write: if false;
+    }
+    match /box_entries/{entryId} {
+      allow read: if warehouseAccess('es-main');
+      allow write: if false;
+    }
+
+    // All remaining paths are denied; this grants no additional access.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

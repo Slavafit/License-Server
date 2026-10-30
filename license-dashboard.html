@@ -127,6 +127,8 @@ button:active{transform:scale(.97);background:var(--surface-1)}
           <div class="hint">Empty = 3 days (default)</div>
         </div>
       </div>
+      <div class="field"><label>Country (optional)</label><select id="f-country" onchange="suggestWarehouse()"><option value="">Not used</option><option value="ES">Spain</option><option value="US">United States</option></select></div>
+      <div class="field"><label>Warehouse (optional)</label><input id="f-warehouse" list="warehouses" maxlength="64" pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="Not used"/><datalist id="warehouses"><option value="es-main"><option value="es-2"><option value="us-main"></datalist></div>
       <button class="btn-success btn-full" onclick="createLicense()"><i class="ti ti-plus"></i> Create License</button>
     </div>
   </div>
@@ -300,13 +302,32 @@ function renderList(){
       </div>
       <div class="lic-meta">
         <div class="lic-meta-row"><i class="ti ti-apps"></i><span class="badge badge-app">${escapeHtml(l.app_id)}</span>${l.app_name?` <span style="color:var(--text-s);font-size:13px">${escapeHtml(l.app_name)}</span>`:''}</div>
+        <div class="lic-meta-row">Country: ${escapeHtml(l.country_code||'—')} · Warehouse: ${escapeHtml(l.warehouse_id||'—')}</div>
         <div class="lic-meta-row"><i class="ti ti-calendar"></i>${formatExpires(l)}</div>
         <div class="lic-meta-row"><i class="ti ti-key"></i><span class="mono">${escapeHtml(tokenShort)}</span></div>
         <div class="lic-meta-row"><i class="ti ti-clock"></i><span style="color:var(--text-m)">${l.created_at?new Date(l.created_at*1000).toLocaleDateString():'-'}</span></div>
       </div>
+      <div class="lic-actions"><button class="btn-sm" onclick="editWarehouse(${Number(l.id)})">Set / remove warehouse</button></div>
       ${actions?`<div class="divider"></div><div class="lic-actions">${actions}</div>`:''}
     </div>`;
   }).join('');
+}
+
+function suggestWarehouse(){
+  const country=document.getElementById('f-country').value;
+  document.getElementById('f-warehouse').value=country==='ES'?'es-main':country==='US'?'us-main':'';
+}
+
+async function editWarehouse(id){
+  const l=licenses.find(item=>Number(item.id)===Number(id));
+  if(!l) return;
+  const value=prompt('Warehouse: es-main, es-2, us-main or custom ID. Empty = remove access.',l.warehouse_id||'');
+  if(value===null) return;
+  try{
+    const d=await api('/admin/warehouse','POST',{id,warehouse_id:value.trim()||null});
+    if(d.ok){showMsg('Warehouse updated','ok');loadLicenses();}
+    else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
 }
 
 async function revoke(id){
@@ -359,6 +380,9 @@ async function createLicense(){
   const days=document.getElementById('f-days').value.trim();
   if(!email||!device||!app){showMsg('Fill email, device ID and app ID','err');return;}
   const body={email,device_id:device,app_id:app,app_name:appname};
+  const warehouse=document.getElementById('f-warehouse').value.trim();
+  const country=document.getElementById('f-country').value;
+  if(warehouse){body.warehouse_id=warehouse;if(country) body.country_code=country;}
   if(days&&!isNaN(days)) body.expires_days=parseInt(days);
   try{
     const d=await api('/admin/create','POST',body);

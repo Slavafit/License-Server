@@ -102,11 +102,9 @@ npx wrangler versions deploy
 { "ok": true, "token": "abc...", "action": "created" }
 ```
 
-**POST /admin/revoke**
+**POST /admin/revoke** (and `/admin/restore`)
 ```json
-{ "token": "abc..." }
-// or
-{ "device_id": "abc123", "app_id": "worktrack" }
+{ "id": 123 }
 ```
 
 **GET /admin/licenses**
@@ -175,4 +173,123 @@ implementation "androidx.datastore:datastore-preferences:1.1.1"
 
 ## Dashboard
 
-Open `license-dashboard.html` in any browser. Settings (URL + key) are saved locally.
+Open the deployed Worker at `/admin`. The URL is saved locally; the admin key
+is kept only in page memory and must be entered again after reload.
+
+## Optional Firebase authentication and warehouses
+
+Firebase is enabled per license only when `warehouse_id` is assigned. Ordinary
+apps omit `country_code` on activation: no warehouse is assigned, and their
+existing `/activate` and `/verify` responses contain no warehouse fields or
+Firebase token. Existing device activation still requires its stored `token`.
+`app_id` selects an application; the exact `warehouse_id` is the data boundary,
+not the country or application. Apps sharing `es-main` share its data; `es-2`
+and `us-main` are separate warehouses. Country is optional metadata (`ES`, `US`).
+
+FastScan activation example:
+
+```json
+{"email":"user@example.com","device_id":"device-id","app_id":"com.ocr.fastscan","app_name":"FastScan","country_code":"US"}
+```
+
+A new trial receives `license-{numeric_id}` and the requested country, never a
+shared warehouse. Email is contact information only and grants no warehouse
+access: every new device gets its own isolated warehouse, even with the same
+email, app and country. Without country, a new license has `NULL` warehouse and
+country. An existing device keeps its assigned warehouse when authenticated
+with its own license token; changing the Android country cannot change access.
+Only an administrator assigns shared warehouses (`es-main`, `es-2`, `us-main`),
+including sharing a warehouse between different apps through the license panel.
+Email verification and one-time device-transfer codes are not implemented.
+
+After approval, use authenticated `POST /admin/warehouse`:
+
+```json
+{"id":123,"warehouse_id":"es-2"}
+```
+
+`es-*` sets `ES`, `us-*` sets `US`. IDs must match
+`^[a-z0-9][a-z0-9-]{0,63}$`. `null` or `""` removes both warehouse and country.
+`POST /admin/create` accepts optional `warehouse_id` and `country_code`;
+conflicting country and prefix are rejected. No warehouse means no Firebase.
+Renewal omitting these fields preserves the assignment. The dashboard offers
+Not used / Spain / United States, suggested warehouses, custom IDs and removal.
+
+Successful warehouse responses add `warehouse_id`, `country_code`, and, when
+configured, `firebase_token`; all existing fields and HTTP statuses remain.
+The token is an RS256 Firebase Custom Token, signed with Web Crypto, valid for
+one hour, with `uid: license:{id}` and claims `warehouse_id`, `country_code`,
+`license_active: true`, `license_expires_at` (Unix seconds, `0` for perpetual),
+`license_id`, `app_id`. Exchange it using Firebase `signInWithCustomToken` in
+project `fastscan-pro-1816f`. A Custom Token is not itself a Firebase ID token.
+Missing or invalid signing configuration logs a safe error and does not stop
+licensing; the response omits `firebase_token`. `GET /health` returns
+`{"ok":true,"firebase_auth_configured":true}` only when all three variables
+are present; this checks presence, not key validity.
+
+The repository includes `firestore.rules` for `/warehouses/{warehouseId}` and
+all nested documents. It requires an authenticated token with a nonempty string
+`warehouse_id` and exact `request.auth.token.warehouse_id == warehouseId`, plus
+an active, unexpired license. Missing claims deny access. Neither email, app ID
+nor country grants warehouse access. As a temporary compatibility exception,
+historical root documents `/shipments/{id}` and `/box_entries/{id}` can be read
+only by active, unexpired `es-main` licenses. Writes and access to their
+subcollections are denied. `es-2`, `us-main`, isolated warehouses and tokens
+without `warehouse_id` cannot read these legacy collections. All other root
+collections are denied.
+Apply these rules to Firestore separately after reviewing your existing rules;
+no Firebase rules are deployed by the Worker. Remove any overlapping permissive
+rule: Firestore combines matching allow rules with OR.
+
+Firebase Security Rules must check the exact signed `warehouse_id`, active
+license and expiration on every warehouse data path. Never authorize using the
+Android country setting or country claim alone. Removing access or revoking a
+license stops new Custom Tokens; existing Firebase sessions need Security Rules
+with expiry checks and, if immediate revocation is required, a server-managed
+revocation mechanism. Token claims alone do not invalidate an existing session.
+
+### Configuration and one-time migration
+
+`FIREBASE_PROJECT_ID = "fastscan-pro-1816f"` is configured in `wrangler.toml`.
+Store `FIREBASE_CLIENT_EMAIL` and `FIREBASE_PRIVATE_KEY` only as Cloudflare
+Secrets. The private key must be a PKCS#8 PEM (`BEGIN PRIVATE KEY`); literal
+`\n` separators are also accepted. Never commit private keys, service-account
+JSON, or local secret files.
+
+For an existing database, apply `0002-security.sql` first if needed, then run
+this migration **exactly once**, before deploying the new Worker. It adds the
+columns/index and assigns **only** existing `com.ocr.fastscan` licenses to
+`es-main` / `ES`. Other applications remain `NULL` / `NULL`. Repeating the ALTER
+statements fails. For a fresh database, use only `schema.sql`, not this migration.
+
+```bash
+npx wrangler d1 execute license-db --remote \
+  --file=migrations/0003-firebase-auth.sql
+
+npx wrangler secret put FIREBASE_CLIENT_EMAIL
+npx wrangler secret put FIREBASE_PRIVATE_KEY
+
+npx wrangler deploy
+```
+
+Firestore Rules emulator checks (Java 21+ required):
+
+```bash
+npm run test:rules
+```
+
+This starts only a local Firestore emulator with project `demo-license-server`.
+No service-account JSON or Firebase login is needed. Tests cover exact warehouse
+isolation, sharing across apps, missing claims, country/email independence,
+license expiry, read-only legacy collections for `es-main`, and denial of other
+root collections. This command does not publish rules or deploy the Worker.
+
+Local checks (do not alter remote D1):
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npx wrangler deploy --dry-run
+npx wrangler d1 execute license-db --local --file=schema.sql
+```

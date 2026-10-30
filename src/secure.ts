@@ -4,10 +4,75 @@ export interface Env {
   DB: D1Database;
   ADMIN_KEY: string;
   ADMIN_ORIGIN?: string;
+  FIREBASE_PROJECT_ID?: string;
+  FIREBASE_CLIENT_EMAIL?: string;
+  FIREBASE_PRIVATE_KEY?: string;
 }
 
 type JsonObject = Record<string, unknown>;
 type LicenseInput = { email: string; device_id: string; app_id: string; app_name: string };
+
+type LicenseRow = {
+  id: number; token: string; app_id: string; device_id: string;
+  is_active: number; is_trial: number; expires_at: number | null;
+  warehouse_id: string | null; country_code: string | null;
+};
+
+function country(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (value !== "ES" && value !== "US") throw new ClientError("country_code must be ES or US");
+  return value;
+}
+
+function warehouse(value: unknown, suppliedCountry?: unknown): { warehouse_id: string | null; country_code: string | null } {
+  if (value === null || value === "" || value === undefined) return { warehouse_id: null, country_code: null };
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) throw new ClientError("Invalid warehouse_id");
+  const inferred = value.startsWith("es-") ? "ES" : value.startsWith("us-") ? "US" : null;
+  const requested = country(suppliedCountry);
+  if (inferred && requested && inferred !== requested) throw new ClientError("country_code conflicts with warehouse_id");
+  return { warehouse_id: value, country_code: inferred ?? requested };
+}
+
+function firebaseConfigured(env: Env): boolean {
+  return Boolean(env.FIREBASE_PROJECT_ID?.trim() && env.FIREBASE_CLIENT_EMAIL?.trim() && env.FIREBASE_PRIVATE_KEY?.trim());
+}
+
+function base64url(bytes: Uint8Array): string {
+  return btoa(Array.from(bytes, b => String.fromCharCode(b)).join("")).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+async function licenseResponse(env: Env, row: LicenseRow, data: JsonObject, status = 200): Promise<Response> {
+  if (!row.warehouse_id) return json(data, status);
+  const claims = {
+    warehouse_id: row.warehouse_id, country_code: row.country_code,
+    license_active: true, license_expires_at: row.expires_at ?? 0,
+    license_id: row.id, app_id: row.app_id,
+  };
+  const result: JsonObject = { ...data, warehouse_id: row.warehouse_id, country_code: row.country_code };
+  if (!firebaseConfigured(env)) {
+    console.error("firebase_auth_unconfigured");
+  } else {
+    try {
+      const issuedAt = now();
+      const encode = (value: unknown) => base64url(new TextEncoder().encode(JSON.stringify(value)));
+      const payload = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({
+        iss: env.FIREBASE_CLIENT_EMAIL, sub: env.FIREBASE_CLIENT_EMAIL,
+        aud: "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit",
+        iat: issuedAt, exp: issuedAt + 3600, uid: `license:${row.id}`, claims,
+      })}`;
+      const pem = env.FIREBASE_PRIVATE_KEY!.replace(/\\n/g, "\n")
+        .replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, "");
+      const key = await crypto.subtle.importKey("pkcs8", Uint8Array.from(atob(pem), c => c.charCodeAt(0)),
+        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+      const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(payload));
+      result.firebase_token = `${payload}.${base64url(new Uint8Array(signature))}`;
+    } catch {
+      // Never log key material, tokens, or errors that may contain private inputs.
+      console.error("firebase_auth_signing_failed");
+    }
+  }
+  return json(result, status);
+}
 
 const TRIAL_DAYS = 3;
 const DAY_SECONDS = 86_400;
@@ -164,7 +229,7 @@ export default {
       let response: Response;
       if (url.pathname === "/activate") response = method === "POST" ? await activate(request, env) : methodNotAllowed("POST");
       else if (url.pathname === "/verify") response = method === "POST" ? await verify(request, env) : methodNotAllowed("POST");
-      else if (url.pathname === "/health" && method === "GET") response = json({ ok: true });
+      else if (url.pathname === "/health" && method === "GET") response = json({ ok: true, firebase_auth_configured: firebaseConfigured(env) });
       else if ((url.pathname === "/admin" || url.pathname === "/admin/") && method === "GET") response = dashboard();
       else if (url.pathname.startsWith("/admin/")) {
         response = await isAdmin(request, env)
@@ -194,6 +259,7 @@ function dashboard(): Response {
 }
 
 async function routeAdmin(request: Request, env: Env, path: string, method: string): Promise<Response> {
+  if (path === "/admin/warehouse") return method === "POST" ? adminWarehouse(request, env) : methodNotAllowed("POST");
   if (path === "/admin/create") return method === "POST" ? adminCreate(request, env) : methodNotAllowed("POST");
   if (path === "/admin/revoke") return method === "POST" ? adminSetActive(request, env, false) : methodNotAllowed("POST");
   if (path === "/admin/restore") return method === "POST" ? adminSetActive(request, env, true) : methodNotAllowed("POST");
@@ -209,8 +275,8 @@ async function activate(request: Request, env: Env): Promise<Response> {
   const suppliedToken = isObject(body) && typeof body.token === "string" ? body.token.trim() : "";
   await limitActivation(request, env, input.app_id);
   const existing = await env.DB.prepare(
-    "SELECT token, is_active, expires_at, is_trial FROM licenses WHERE device_id = ? AND app_id = ? ORDER BY id DESC LIMIT 1",
-  ).bind(input.device_id, input.app_id).first<{ token: string; is_active: number; expires_at: number | null; is_trial: number }>();
+    "SELECT * FROM licenses WHERE device_id = ? AND app_id = ? ORDER BY id DESC LIMIT 1",
+  ).bind(input.device_id, input.app_id).first<LicenseRow>();
 
   if (existing) {
     if (!suppliedToken || !(await secureEqual(suppliedToken, existing.token))) {
@@ -220,20 +286,24 @@ async function activate(request: Request, env: Env): Promise<Response> {
     if (existing.expires_at !== null && existing.expires_at <= now()) {
       return json({ ok: false, reason: existing.is_trial ? "trial_expired" : "expired" }, 403);
     }
-    return json({ ok: true, token: existing.token, status: existing.is_trial ? "trial" : "active", expires_at: existing.expires_at });
+    return licenseResponse(env, existing, { ok: true, token: existing.token, status: existing.is_trial ? "trial" : "active", expires_at: existing.expires_at });
   }
 
+  const requestedCountry = country(isObject(body) ? body.country_code : undefined);
   const token = generateToken();
   const expiresAt = now() + TRIAL_DAYS * DAY_SECONDS;
-  await env.DB.prepare(
+  const insert = env.DB.prepare(
     `INSERT INTO licenses (email, device_id, app_id, app_name, token, is_active, is_trial, expires_at, created_at)
      SELECT ?, ?, ?, ?, ?, 1, 1, ?, ?
      WHERE NOT EXISTS (SELECT 1 FROM licenses WHERE device_id = ? AND app_id = ?)`,
-  ).bind(input.email, input.device_id, input.app_id, input.app_name, token, expiresAt, now(), input.device_id, input.app_id).run();
-  const created = await env.DB.prepare("SELECT token FROM licenses WHERE device_id = ? AND app_id = ? ORDER BY id DESC LIMIT 1")
-    .bind(input.device_id, input.app_id).first<{ token: string }>();
+  ).bind(input.email, input.device_id, input.app_id, input.app_name, token, expiresAt, now(), input.device_id, input.app_id);
+  await env.DB.batch([insert, env.DB.prepare(
+    "UPDATE licenses SET warehouse_id = 'license-' || id, country_code = ? WHERE token = ? AND ? IS NOT NULL",
+  ).bind(requestedCountry, token, requestedCountry)]);
+  const created = await env.DB.prepare("SELECT * FROM licenses WHERE device_id = ? AND app_id = ? ORDER BY id DESC LIMIT 1")
+    .bind(input.device_id, input.app_id).first<LicenseRow>();
   if (!created || created.token !== token) return json({ ok: false, reason: "already_registered" }, 409);
-  return json({ ok: true, token, status: "trial", expires_at: expiresAt }, 201);
+  return licenseResponse(env, created, { ok: true, token, status: "trial", expires_at: expiresAt }, 201);
 }
 
 async function verify(request: Request, env: Env): Promise<Response> {
@@ -243,36 +313,50 @@ async function verify(request: Request, env: Env): Promise<Response> {
   const deviceId = cleanString(body.device_id, "device_id", 200);
   const appId = cleanString(body.app_id, "app_id", 100);
   const row = await env.DB.prepare(
-    "SELECT is_active, expires_at, device_id, is_trial FROM licenses WHERE token = ? AND app_id = ? LIMIT 1",
-  ).bind(token, appId).first<{ is_active: number; expires_at: number | null; device_id: string; is_trial: number }>();
+    "SELECT * FROM licenses WHERE token = ? AND app_id = ? LIMIT 1",
+  ).bind(token, appId).first<LicenseRow>();
   if (!row) return json({ ok: false, valid: false, reason: "not_found" });
   if (!row.is_active) return json({ ok: false, valid: false, reason: "revoked" });
   if (row.expires_at !== null && row.expires_at <= now()) return json({ ok: false, valid: false, reason: row.is_trial ? "trial_expired" : "expired" });
   if (!(await secureEqual(deviceId, row.device_id))) return json({ ok: false, valid: false, reason: "device_mismatch" });
-  return json({ ok: true, valid: true, status: row.is_trial ? "trial" : "active", expires_at: row.expires_at });
+  return licenseResponse(env, row, { ok: true, valid: true, status: row.is_trial ? "trial" : "active", expires_at: row.expires_at });
 }
 
 async function adminCreate(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
   const input = parseLicense(body);
   if (!isObject(body)) throw new ClientError("JSON object required");
+  const hasWarehouse = Object.hasOwn(body, "warehouse_id");
+  const access = warehouse(body.warehouse_id, body.country_code);
   const days = positiveInteger(body.expires_days, "expires_days", 3650);
   const expiresAt = days === null ? null : now() + days * DAY_SECONDS;
   const existing = await env.DB.prepare("SELECT id FROM licenses WHERE device_id = ? AND app_id = ? ORDER BY id DESC LIMIT 1")
     .bind(input.device_id, input.app_id).first<{ id: number }>();
   if (existing) {
-    await env.DB.prepare("UPDATE licenses SET is_active = 1, is_trial = 0, expires_at = ?, email = ?, app_name = ? WHERE id = ?")
-      .bind(expiresAt, input.email, input.app_name, existing.id).run();
+    await env.DB.prepare("UPDATE licenses SET is_active = 1, is_trial = 0, expires_at = ?, email = ?, app_name = ?, warehouse_id = CASE WHEN ? THEN ? ELSE warehouse_id END, country_code = CASE WHEN ? THEN ? ELSE country_code END WHERE id = ?")
+      .bind(expiresAt, input.email, input.app_name, Number(hasWarehouse), access.warehouse_id, Number(hasWarehouse), access.country_code, existing.id).run();
     await audit(request, env, "license.activated", existing.id, { expires_at: expiresAt });
     return json({ ok: true, id: existing.id, action: "activated" });
   }
   const token = generateToken();
   const result = await env.DB.prepare(
-    "INSERT INTO licenses (email, device_id, app_id, app_name, token, is_active, is_trial, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)",
-  ).bind(input.email, input.device_id, input.app_id, input.app_name, token, expiresAt, now()).run();
+    "INSERT INTO licenses (email, device_id, app_id, app_name, token, is_active, is_trial, expires_at, created_at, warehouse_id, country_code) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)",
+  ).bind(input.email, input.device_id, input.app_id, input.app_name, token, expiresAt, now(), access.warehouse_id, access.country_code).run();
   const id = Number(result.meta.last_row_id);
   await audit(request, env, "license.created", id, { app_id: input.app_id, expires_at: expiresAt });
   return json({ ok: true, id, token, action: "created" }, 201);
+}
+
+async function adminWarehouse(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  if (!isObject(body) || typeof body.id !== "number" || !Number.isSafeInteger(body.id) || body.id < 1) throw new ClientError("A positive integer id is required");
+  if (!Object.hasOwn(body, "warehouse_id")) throw new ClientError("warehouse_id is required");
+  const access = warehouse(body.warehouse_id);
+  const result = await env.DB.prepare("UPDATE licenses SET warehouse_id = ?, country_code = ? WHERE id = ?")
+    .bind(access.warehouse_id, access.country_code, body.id).run();
+  if (!result.meta.changes) return err("License not found", 404, "not_found");
+  await audit(request, env, "license.warehouse", body.id, access);
+  return json({ ok: true, id: body.id, ...access });
 }
 
 async function adminSetActive(request: Request, env: Env, active: boolean): Promise<Response> {
@@ -292,7 +376,7 @@ async function adminList(request: Request, env: Env): Promise<Response> {
   const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
   const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 100;
   let query = `SELECT id, email, device_id, app_id, app_name, substr(token, -4) AS token_last4,
-    is_active, is_trial, expires_at, created_at FROM licenses WHERE 1 = 1`;
+    is_active, is_trial, expires_at, created_at, warehouse_id, country_code FROM licenses WHERE 1 = 1`;
   const params: Array<string | number> = [];
   if (appId) { query += " AND app_id = ?"; params.push(appId); }
   if (email) { query += " AND email LIKE ? ESCAPE '\\'"; params.push(`%${email.replace(/[\\%_]/g, "\\$&")}%`); }

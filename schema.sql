@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS licenses (
     device_id   TEXT NOT NULL,
     app_id      TEXT NOT NULL,
     app_name    TEXT DEFAULT '',
+    warehouse_id TEXT,
+    country_code TEXT,
     token       TEXT NOT NULL UNIQUE,
     is_active   INTEGER DEFAULT 1,
     is_trial    INTEGER DEFAULT 0,   -- 1=триал, 0=полная лицензия
@@ -33,3 +35,5 @@ CREATE TABLE IF NOT EXISTS admin_audit (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_created ON admin_audit(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_warehouse ON licenses(warehouse_id);
