@@ -8,9 +8,11 @@ const projectId = 'demo-license-server';
 let env;
 setLogLevel('silent');
 const warehouses = ['es-main', 'es-2', 'us-main', 'license-123', 'license-456'];
+const mutableCollections = ['shipments', 'box_entries', 'product_catalog', 'order_contents'];
+const reportCollection = 'box_inventory_reports';
 const claims = (warehouse_id, extra = {}) => ({
   warehouse_id, country_code: 'ES', license_active: true, license_expires_at: 0,
-  app_id: 'com.ocr.fastscan', license_id: 123, ...extra,
+  auth_time: Math.floor(Date.now() / 1000), app_id: 'com.ocr.fastscan', license_id: 123, ...extra,
 });
 let user = 0;
 const client = token => env.authenticatedContext(`license:${++user}`, token).firestore();
@@ -26,7 +28,9 @@ before(async () => {
     const db = context.firestore();
     for (const warehouse of warehouses) {
       await setDoc(doc(db, `warehouses/${warehouse}`), { name: warehouse });
-      await setDoc(shipment(db, warehouse), { warehouse });
+      for (const name of [...mutableCollections, reportCollection]) {
+        await setDoc(doc(db, `warehouses/${warehouse}/${name}/existing`), { warehouse, name });
+      }
     }
     for (const name of ['shipments', 'box_entries', 'users', 'licenses', 'settings']) {
       await setDoc(doc(db, `${name}/existing`), { historical: true });
@@ -37,23 +41,38 @@ before(async () => {
 });
 after(async () => { if (env) await env.cleanup(); });
 
-test('each warehouse permits its own documents and rejects every other warehouse', async () => {
+test('each warehouse permits only the supported operations in its own collections', async () => {
   for (const warehouse of warehouses) {
     const db = client(claims(warehouse));
-    await assertSucceeds(getDoc(doc(db, `warehouses/${warehouse}`)));
-    await assertSucceeds(getDoc(shipment(db, warehouse)));
-    await assertSucceeds(getDocs(collection(db, `warehouses/${warehouse}/shipments`)));
-    const created = doc(db, `warehouses/${warehouse}/box_entries/new`);
-    await assertSucceeds(setDoc(created, { value: 1 }));
-    await assertSucceeds(updateDoc(created, { value: 2 }));
-    await assertSucceeds(deleteDoc(created));
-    for (const other of warehouses.filter(value => value !== warehouse)) {
-      await assertFails(getDoc(shipment(db, other)));
-      await assertFails(getDocs(collection(db, `warehouses/${other}/shipments`)));
-      await assertFails(setDoc(shipment(db, other), { forbidden: true }));
-      await assertFails(deleteDoc(shipment(db, other)));
-    }
+    await assertFails(getDoc(doc(db, `warehouses/${warehouse}`)));
     await assertFails(getDocs(collection(db, 'warehouses')));
+    for (const name of mutableCollections) {
+      const existing = doc(db, `warehouses/${warehouse}/${name}/existing`);
+      const created = doc(db, `warehouses/${warehouse}/${name}/new-${user}`);
+      await assertSucceeds(getDoc(existing));
+      await assertSucceeds(getDocs(collection(db, `warehouses/${warehouse}/${name}`)));
+      await assertSucceeds(setDoc(created, { value: 1 }));
+      await assertSucceeds(updateDoc(created, { value: 2 }));
+      await assertFails(deleteDoc(created));
+    }
+    const existingReport = doc(db, `warehouses/${warehouse}/${reportCollection}/existing`);
+    const createdReport = doc(db, `warehouses/${warehouse}/${reportCollection}/new-${user}`);
+    await assertSucceeds(getDoc(existingReport));
+    await assertSucceeds(getDocs(collection(db, `warehouses/${warehouse}/${reportCollection}`)));
+    await assertSucceeds(setDoc(createdReport, { value: 1 }));
+    await assertFails(updateDoc(createdReport, { value: 2 }));
+    await assertFails(deleteDoc(createdReport));
+    await assertFails(getDoc(doc(db, `warehouses/${warehouse}/unknown/existing`)));
+    await assertFails(setDoc(doc(db, `warehouses/${warehouse}/unknown/new`), { forbidden: true }));
+    for (const other of warehouses.filter(value => value !== warehouse)) {
+      for (const name of [...mutableCollections, reportCollection]) {
+        const forbidden = doc(db, `warehouses/${other}/${name}/existing`);
+        await assertFails(getDoc(forbidden));
+        await assertFails(getDocs(collection(db, `warehouses/${other}/${name}`)));
+        await assertFails(setDoc(forbidden, { forbidden: true }));
+        await assertFails(deleteDoc(forbidden));
+      }
+    }
   }
 });
 
@@ -96,10 +115,13 @@ test('unauthenticated clients cannot read or write warehouse or root data', asyn
 test('inactive, expired and incomplete license claims deny access', async () => {
   const missingActive = claims('es-main'); delete missingActive.license_active;
   const missingExpiry = claims('es-main'); delete missingExpiry.license_expires_at;
+  const missingAuthTime = claims('es-main'); delete missingAuthTime.auth_time;
   for (const token of [claims('es-main', { license_active: false }),
     claims('es-main', { license_expires_at: Math.floor(Date.now() / 1000) - 60 }),
     claims('es-main', { license_expires_at: -1 }),
-    claims('es-main', { license_expires_at: '0' }), missingActive, missingExpiry]) {
+    claims('es-main', { license_expires_at: '0' }),
+    claims('es-main', { auth_time: Math.floor(Date.now() / 1000) - 172801 }),
+    claims('es-main', { auth_time: 'now' }), missingActive, missingExpiry, missingAuthTime]) {
     const db = client(token);
     await assertFails(getDoc(shipment(db, 'es-main')));
     await assertFails(setDoc(shipment(db, 'es-main'), { forbidden: true }));
