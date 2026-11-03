@@ -167,3 +167,77 @@ test('missing or malformed Firebase secrets preserve licensing', async () => {
     } finally { await mf.dispose(); }
   }
 });
+
+test('archive migration is repeatable and existing licenses stay visible', async () => {
+  const { mf, db } = await setup();
+  try {
+    // Schema as it existed before archive metadata was introduced.
+    await sql(db, schema.replace(/-- Additive and safe to run more than once[\s\S]*$/, ''));
+    const created = (await api(mf, '/admin/create', input('pre-archive'), true)).data;
+    const before = (await db.prepare('SELECT * FROM licenses').all()).results;
+    const archiveMigration = await readFile(new URL('../migrations/0004-license-archive.sql', import.meta.url), 'utf8');
+    await sql(db, archiveMigration);
+    await sql(db, archiveMigration);
+    assert.deepEqual((await db.prepare('SELECT * FROM licenses').all()).results, before);
+    const list = (await api(mf, '/admin/licenses', undefined, true)).data;
+    assert.equal(list.count, 1); assert.equal(list.licenses[0].is_archived, 0);
+    assert.equal((await api(mf, '/verify', { ...input('pre-archive'), token: created.token })).data.ok, true);
+  } finally { await mf.dispose(); }
+});
+
+test('archive is reversible admin metadata and never changes license access', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema);
+    const normalInput = input('archive-normal', { app_id: 'other.app' });
+    const warehouseInput = input('archive-warehouse', { warehouse_id: 'es-2' });
+    const normal = (await api(mf, '/admin/create', normalInput, true)).data;
+    const stored = (await api(mf, '/admin/create', warehouseInput, true)).data;
+    const list = async query => (await api(mf, '/admin/licenses'+(query ? '?'+query : ''), undefined, true)).data;
+    const check = async (license, licenseInput) => (await api(mf, '/verify', { ...licenseInput, token: license.token })).data;
+    const before = (await db.prepare('SELECT * FROM licenses ORDER BY id').all()).results;
+    const normalBefore = await check(normal, normalInput);
+    const claimsBefore = decode((await check(stored, warehouseInput)).firebase_token).claims;
+    assert.equal((await api(mf, '/admin/archive', { id: stored.id, archived: true })).status, 401);
+    assert.equal((await api(mf, '/admin/archive', undefined, true)).status, 405);
+    for (const body of [{ id: '1', archived: true }, { id: 0, archived: true }, { id: 1 }, { id: 1, archived: 'true' }]) {
+      assert.equal((await api(mf, '/admin/archive', body, true)).status, 400);
+    }
+    assert.equal((await api(mf, '/admin/archive', { id: 999, archived: true }, true)).status, 404);
+    assert.equal((await api(mf, '/admin/archive', { id: 999, archived: false }, true)).status, 404);
+    for (let repeat = 0; repeat < 2; repeat++) {
+      assert.deepEqual((await api(mf, '/admin/archive', { id: stored.id, archived: true }, true)).data,
+        { ok: true, id: stored.id, archived: true });
+    }
+    assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM license_archive').first()).count, 1);
+    assert.deepEqual((await list()).licenses.map(l => l.id), [normal.id]);
+    assert.deepEqual((await list('limit=1')).licenses.map(l => l.id), [normal.id]);
+    assert.deepEqual((await list('archived=1')).licenses.map(l => [l.id, l.is_archived]), [[stored.id, 1]]);
+    assert.equal((await list('archived=all')).count, 2);
+    assert.equal((await list('archived=1&app_id=other.app')).count, 0);
+    assert.equal((await api(mf, '/admin/licenses?archived=invalid', undefined, true)).status, 400);
+    assert.deepEqual((await db.prepare('SELECT * FROM licenses ORDER BY id').all()).results, before);
+    assert.deepEqual(decode((await check(stored, warehouseInput)).firebase_token).claims, claimsBefore);
+    const reactivated = (await api(mf, '/activate', { ...warehouseInput, token: stored.token, country_code: 'US' })).data;
+    assert.equal(reactivated.warehouse_id, 'es-2'); assert.equal(reactivated.country_code, 'ES');
+    await api(mf, '/admin/archive', { id: normal.id, archived: true }, true);
+    assert.equal((await list()).count, 0);
+    assert.deepEqual(await check(normal, normalInput), normalBefore);
+    const normalActivation = (await api(mf, '/activate', { ...normalInput, token: normal.token })).data;
+    assert.equal(normalActivation.ok, true); ordinary(normalActivation);
+    await api(mf, '/admin/create', { ...warehouseInput, expires_days: 30 }, true);
+    assert.equal((await list('archived=1')).count, 2); // Renewal does not unarchive.
+    assert.equal((await check(stored, warehouseInput)).warehouse_id, 'es-2');
+    await api(mf, '/admin/revoke', { id: stored.id }, true);
+    assert.equal((await check(stored, warehouseInput)).reason, 'revoked');
+    await api(mf, '/admin/archive', { id: stored.id, archived: false }, true);
+    assert.equal((await check(stored, warehouseInput)).reason, 'revoked'); // Unarchive never restores access.
+    assert.deepEqual((await list()).licenses.map(l => l.id), [stored.id]);
+    await api(mf, '/admin/archive', { id: normal.id, archived: false }, true);
+    await api(mf, '/admin/archive', { id: normal.id, archived: false }, true);
+    assert.equal((await list()).count, 2);
+    const events = (await api(mf, '/admin/audit', undefined, true)).data.events;
+    assert(events.some(e => e.action === 'license.archived' && e.license_id === stored.id));
+    assert(events.some(e => e.action === 'license.unarchived' && e.license_id === stored.id));
+  } finally { await mf.dispose(); }
+});

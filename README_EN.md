@@ -293,3 +293,36 @@ npm test
 npx wrangler deploy --dry-run
 npx wrangler d1 execute license-db --local --file=schema.sql
 ```
+
+## License archive
+
+The `/admin` dashboard provides **«В архив»** (Archive), **«Вернуть из архива»**
+(Unarchive), and a **«Текущие / Архив / Все»** (Current / Archive / All) filter.
+Current licenses are shown by default. Statistics and app filters describe the
+loaded list (up to 100 records).
+
+Archiving only hides a record: token, active status, expiry, warehouse and Firebase
+access stay unchanged. Use **Revoke** separately to disable an old device.
+Unarchiving does not restore a revoked license. Renewal preserves archive state.
+Nothing is archived or deleted automatically.
+
+For existing installations, add the archive table before deploying the Worker.
+This migration is safe to repeat and does not modify existing licenses. Fresh
+installations already include the table in `schema.sql`.
+
+```bash
+git pull origin master
+npm ci
+npx wrangler d1 execute license-db --remote --file=migrations/0004-license-archive.sql
+npx wrangler deploy
+```
+
+Admin API (requires `X-Admin-Key`):
+
+- `POST /admin/archive` with `{"id":123,"archived":true}` to archive,
+  or `{"id":123,"archived":false}` to unarchive.
+- `GET /admin/licenses?archived=0` for current (default), `archived=1` for
+  archived, `archived=all` for both.
+
+Archive filtering precedes the row limit. Changes are audited. Public `/activate`
+and `/verify` ignore archive state.

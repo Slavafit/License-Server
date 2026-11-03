@@ -260,6 +260,7 @@ function dashboard(): Response {
 
 async function routeAdmin(request: Request, env: Env, path: string, method: string): Promise<Response> {
   if (path === "/admin/firestore/migrate-order-contents") return method === "POST" ? adminMigrateOrderContents(request, env) : methodNotAllowed("POST");
+  if (path === "/admin/archive") return method === "POST" ? adminArchive(request, env) : methodNotAllowed("POST");
   if (path === "/admin/warehouse") return method === "POST" ? adminWarehouse(request, env) : methodNotAllowed("POST");
   if (path === "/admin/create") return method === "POST" ? adminCreate(request, env) : methodNotAllowed("POST");
   if (path === "/admin/revoke") return method === "POST" ? adminSetActive(request, env, false) : methodNotAllowed("POST");
@@ -475,6 +476,25 @@ async function adminWarehouse(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, id: body.id, ...access });
 }
 
+// Archive is dashboard metadata only: public activation and verification ignore it.
+async function adminArchive(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  if (!isObject(body) || typeof body.id !== "number" || !Number.isSafeInteger(body.id) || body.id < 1) {
+    throw new ClientError("A positive integer id is required");
+  }
+  if (typeof body.archived !== "boolean") throw new ClientError("archived must be a boolean");
+  const license = await env.DB.prepare("SELECT id FROM licenses WHERE id = ?").bind(body.id).first();
+  if (!license) return err("License not found", 404, "not_found");
+  if (body.archived) {
+    await env.DB.prepare("INSERT INTO license_archive (license_id, archived_at) VALUES (?, ?) ON CONFLICT(license_id) DO NOTHING")
+      .bind(body.id, now()).run();
+  } else {
+    await env.DB.prepare("DELETE FROM license_archive WHERE license_id = ?").bind(body.id).run();
+  }
+  await audit(request, env, body.archived ? "license.archived" : "license.unarchived", body.id);
+  return json({ ok: true, id: body.id, archived: body.archived });
+}
+
 async function adminSetActive(request: Request, env: Env, active: boolean): Promise<Response> {
   const body = await readJson(request);
   if (!isObject(body) || typeof body.id !== "number" || !Number.isInteger(body.id) || body.id < 1) throw new ClientError("A positive integer id is required");
@@ -489,15 +509,24 @@ async function adminList(request: Request, env: Env): Promise<Response> {
   const appId = url.searchParams.get("app_id")?.trim().slice(0, 100) ?? "";
   const email = url.searchParams.get("email")?.trim().slice(0, 254) ?? "";
   const active = url.searchParams.get("active");
+  const archived = url.searchParams.get("archived") ?? "0";
+  if (!["0", "1", "all"].includes(archived)) throw new ClientError("archived must be 0, 1 or all");
   const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
   const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 100;
   let query = `SELECT id, email, device_id, app_id, app_name, substr(token, -4) AS token_last4,
-    is_active, is_trial, expires_at, created_at, warehouse_id, country_code FROM licenses WHERE 1 = 1`;
+    is_active, is_trial, expires_at, created_at, warehouse_id, country_code,
+    EXISTS (SELECT 1 FROM license_archive WHERE license_id = licenses.id) AS is_archived
+    FROM licenses WHERE 1 = 1`;
   const params: Array<string | number> = [];
   if (appId) { query += " AND app_id = ?"; params.push(appId); }
   if (email) { query += " AND email LIKE ? ESCAPE '\\'"; params.push(`%${email.replace(/[\\%_]/g, "\\$&")}%`); }
   if (active === "0" || active === "1") { query += " AND is_active = ?"; params.push(Number(active)); }
-  query += " ORDER BY created_at DESC LIMIT ?";
+  if (archived !== "all") {
+    query += archived === "1"
+      ? " AND id IN (SELECT license_id FROM license_archive)"
+      : " AND id NOT IN (SELECT license_id FROM license_archive)";
+  }
+  query += " ORDER BY created_at DESC, id DESC LIMIT ?";
   params.push(limit);
   const rows = await env.DB.prepare(query).bind(...params).all();
   return json({ ok: true, count: rows.results.length, licenses: rows.results });

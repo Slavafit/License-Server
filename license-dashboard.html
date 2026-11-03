@@ -151,6 +151,14 @@ button:active{transform:scale(.97);background:var(--surface-1)}
         <option value="">All apps</option>
       </select>
     </div>
+    <div class="field"><label>Архив</label>
+      <select id="filter-archive" onchange="loadLicenses()">
+        <option value="0">Текущие</option>
+        <option value="1">Архив</option>
+        <option value="all">Все</option>
+      </select>
+      <div class="hint">Архив только скрывает запись. Для отключения лицензии используйте Revoke.</div>
+    </div>
   </div>
 
   <div id="lic-list" class="lic-list">
@@ -207,7 +215,8 @@ async function api(path,method='GET',body=null){
 async function loadLicenses(){
   document.getElementById('lic-list').innerHTML='<div class="empty"><i class="ti ti-loader"></i> Loading...</div>';
   try{
-    const data=await api('/admin/licenses');
+    const archived=document.getElementById('filter-archive').value;
+    const data=await api('/admin/licenses?archived='+encodeURIComponent(archived));
     if(!data.ok){showMsg(data.error||'Error','err');return;}
     licenses=data.licenses||[];
     updateStats();
@@ -297,7 +306,7 @@ function renderList(){
 
     return `<div class="lic-card">
       <div class="lic-top">
-        <div class="lic-email">${escapeHtml(l.email)}</div>
+        <div class="lic-email">${escapeHtml(l.email)}${l.is_archived?' <span class="badge badge-pending">В архиве</span>':''}</div>
         <span class="badge badge-${st}">${st}</span>
       </div>
       <div class="lic-meta">
@@ -307,10 +316,20 @@ function renderList(){
         <div class="lic-meta-row"><i class="ti ti-key"></i><span class="mono">${escapeHtml(tokenShort)}</span></div>
         <div class="lic-meta-row"><i class="ti ti-clock"></i><span style="color:var(--text-m)">${l.created_at?new Date(l.created_at*1000).toLocaleDateString():'-'}</span></div>
       </div>
-      <div class="lic-actions"><button class="btn-sm" onclick="editWarehouse(${Number(l.id)})">Set / remove warehouse</button></div>
+      <div class="lic-actions"><button class="btn-sm" onclick="editWarehouse(${Number(l.id)})">Set / remove warehouse</button>
+        <button class="btn-sm" onclick="setArchived(${Number(l.id)},${!l.is_archived})">${l.is_archived?'Вернуть из архива':'В архив'}</button></div>
       ${actions?`<div class="divider"></div><div class="lic-actions">${actions}</div>`:''}
     </div>`;
   }).join('');
+}
+
+async function setArchived(id,archived){
+  if(archived&&!confirm('Скрыть лицензию в архиве? Она продолжит работать. Для отключения используйте Revoke.')) return;
+  try{
+    const d=await api('/admin/archive','POST',{id,archived});
+    if(d.ok){showMsg(archived?'Лицензия в архиве':'Лицензия возвращена из архива','ok');await loadLicenses();}
+    else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
 }
 
 function suggestWarehouse(){
