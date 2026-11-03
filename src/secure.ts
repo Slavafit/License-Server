@@ -259,6 +259,7 @@ function dashboard(): Response {
 }
 
 async function routeAdmin(request: Request, env: Env, path: string, method: string): Promise<Response> {
+  if (path === "/admin/firestore/migrate-order-contents") return method === "POST" ? adminMigrateOrderContents(request, env) : methodNotAllowed("POST");
   if (path === "/admin/warehouse") return method === "POST" ? adminWarehouse(request, env) : methodNotAllowed("POST");
   if (path === "/admin/create") return method === "POST" ? adminCreate(request, env) : methodNotAllowed("POST");
   if (path === "/admin/revoke") return method === "POST" ? adminSetActive(request, env, false) : methodNotAllowed("POST");
@@ -267,6 +268,121 @@ async function routeAdmin(request: Request, env: Env, path: string, method: stri
   if (path === "/admin/apps") return method === "GET" ? adminApps(env) : methodNotAllowed("GET");
   if (path === "/admin/audit") return method === "GET" ? adminAudit(env) : methodNotAllowed("GET");
   return err("Not found", 404, "not_found");
+}
+
+type FirestoreDocument = { name?: string; fields?: Record<string, unknown> };
+
+async function firebaseAccessToken(env: Env): Promise<string> {
+  if (!firebaseConfigured(env)) throw new ClientError("Firebase Admin is not configured", 503);
+  const issuedAt = now();
+  const encode = (value: unknown) => base64url(new TextEncoder().encode(JSON.stringify(value)));
+  const payload = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({
+    iss: env.FIREBASE_CLIENT_EMAIL,
+    sub: env.FIREBASE_CLIENT_EMAIL,
+    aud: "https://oauth2.googleapis.com/token",
+    scope: "https://www.googleapis.com/auth/datastore",
+    iat: issuedAt,
+    exp: issuedAt + 3600,
+  })}`;
+  const pem = env.FIREBASE_PRIVATE_KEY!.replace(/\\n/g, "\n")
+    .replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, "");
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    Uint8Array.from(atob(pem), c => c.charCodeAt(0)),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(payload));
+  const assertion = `${payload}.${base64url(new Uint8Array(signature))}`;
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+  const result = await response.json() as { access_token?: string };
+  if (!response.ok || !result.access_token) throw new ClientError("Could not authorize Firebase Admin", 502);
+  return result.access_token;
+}
+
+async function listFirestoreDocuments(env: Env, token: string, warehouseId: string): Promise<FirestoreDocument[]> {
+  const project = encodeURIComponent(env.FIREBASE_PROJECT_ID!.trim());
+  const warehouseIdEncoded = encodeURIComponent(warehouseId);
+  const base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/warehouses/${warehouseIdEncoded}/order_contents`;
+  const documents: FirestoreDocument[] = [];
+  let pageToken = "";
+  do {
+    const url = new URL(base);
+    url.searchParams.set("pageSize", "300");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new ClientError("Could not read Firestore order contents", 502);
+    const result = await response.json() as { documents?: FirestoreDocument[]; nextPageToken?: string };
+    documents.push(...(result.documents ?? []));
+    pageToken = result.nextPageToken ?? "";
+  } while (pageToken);
+  return documents;
+}
+
+function firestoreDocumentId(document: FirestoreDocument): string | null {
+  const id = document.name?.split("/").pop() ?? "";
+  return id && !id.includes("/") ? id : null;
+}
+
+async function adminMigrateOrderContents(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  if (!isObject(body)) throw new ClientError("JSON object required");
+  const source = warehouse(body.source_warehouse).warehouse_id;
+  const target = warehouse(body.target_warehouse).warehouse_id;
+  if (!source || !target || source === target) throw new ClientError("Different source_warehouse and target_warehouse are required");
+  const dryRun = body.dry_run !== false;
+  const token = await firebaseAccessToken(env);
+  const [sourceDocuments, targetDocuments] = await Promise.all([
+    listFirestoreDocuments(env, token, source),
+    listFirestoreDocuments(env, token, target),
+  ]);
+  const targetIds = new Set(targetDocuments.map(firestoreDocumentId).filter((id): id is string => Boolean(id)));
+  const pending = sourceDocuments.filter(document => {
+    const id = firestoreDocumentId(document);
+    return Boolean(id && !targetIds.has(id) && document.fields);
+  });
+  if (!dryRun && pending.length) {
+    const project = encodeURIComponent(env.FIREBASE_PROJECT_ID!.trim());
+    const commitUrl = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents:commit`;
+    for (let offset = 0; offset < pending.length; offset += 450) {
+      const writes = pending.slice(offset, offset + 450).map(document => ({
+        update: {
+          name: `projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/warehouses/${target}/order_contents/${firestoreDocumentId(document)}`,
+          fields: document.fields,
+        },
+        currentDocument: { exists: false },
+      }));
+      const response = await fetch(commitUrl, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ writes }),
+      });
+      if (!response.ok) throw new ClientError("Could not copy Firestore order contents", 502);
+    }
+    await audit(request, env, "firestore.order_contents_migrated", null, {
+      source_warehouse: source,
+      target_warehouse: target,
+      copied: pending.length,
+    });
+  }
+  return json({
+    ok: true,
+    dry_run: dryRun,
+    source_warehouse: source,
+    target_warehouse: target,
+    source_count: sourceDocuments.length,
+    target_count: targetDocuments.length,
+    copy_count: pending.length,
+    skipped_existing: sourceDocuments.length - pending.length,
+  });
 }
 
 async function activate(request: Request, env: Env): Promise<Response> {
