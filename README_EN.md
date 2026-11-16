@@ -326,3 +326,48 @@ Admin API (requires `X-Admin-Key`):
 
 Archive filtering precedes the row limit. Changes are audited. Public `/activate`
 and `/verify` ignore archive state.
+
+## One-time lost token recovery
+
+After reinstalling an app, an administrator can verify the license's application
+and **device_id** in `/admin` and select **«Разрешить восстановление токена»**
+(Allow token recovery). A confirmation precedes granting a 10-minute permission;
+the panel shows its expiration without displaying the full token. The device
+must retain the same `device_id` after reinstall. This is not a device-transfer
+mechanism.
+
+Authenticated `POST /admin/license-recovery` (`X-Admin-Key`) accepts:
+
+```json
+{"id":21,"ttl_minutes":10}
+```
+
+TTL is an integer from 1 to 10 minutes, defaulting to 10. Revoked or expired
+licenses cannot be authorized. The response contains only `ok`, `id` and
+`recovery_allowed_until` (Unix seconds). Granting permission is audited without
+full tokens.
+
+The client then calls normal `/activate` without a token using exactly the same
+`device_id` and `app_id`. An active permission and valid license allow one atomic
+rotation to a new random token and consumption of the permission. Only one
+concurrent request succeeds. The old token immediately stops working, and a
+second recovery requires fresh administrative authorization. Email is contact
+information only; it grants no recovery rights. An explicitly incorrect token
+does not trigger recovery.
+
+License ID, expiry, status, country and warehouse are preserved. The usual
+activation response is returned, including Firebase Custom Token and warehouse
+fields only for warehouse licenses. New devices can still create their own
+ordinary trials, but cannot recover another device's license or warehouse.
+Activation rate limiting remains enforced.
+
+For an existing database, apply this migration **once** before deploying:
+
+```bash
+npx wrangler d1 execute license-db --remote --file=migrations/0005-license-recovery.sql
+npx wrangler deploy
+```
+
+It only adds nullable `recovery_allowed_until`; existing licenses receive no
+permission. Fresh databases use `schema.sql`. Deployment never applies this
+migration automatically.

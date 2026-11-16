@@ -313,14 +313,29 @@ function renderList(){
         <div class="lic-meta-row"><i class="ti ti-apps"></i><span class="badge badge-app">${escapeHtml(l.app_id)}</span>${l.app_name?` <span style="color:var(--text-s);font-size:13px">${escapeHtml(l.app_name)}</span>`:''}</div>
         <div class="lic-meta-row">Country: ${escapeHtml(l.country_code||'—')} · Warehouse: ${escapeHtml(l.warehouse_id||'—')}</div>
         <div class="lic-meta-row"><i class="ti ti-calendar"></i>${formatExpires(l)}</div>
+        ${l.recovery_allowed_until?`<div class="lic-meta-row">${l.recovery_allowed_until>nowSec()?'Восстановление разрешено до':'Разрешение восстановления истекло'}: ${escapeHtml(new Date(l.recovery_allowed_until*1000).toLocaleString())}</div>`:''}
         <div class="lic-meta-row"><i class="ti ti-key"></i><span class="mono">${escapeHtml(tokenShort)}</span></div>
         <div class="lic-meta-row"><i class="ti ti-clock"></i><span style="color:var(--text-m)">${l.created_at?new Date(l.created_at*1000).toLocaleDateString():'-'}</span></div>
       </div>
       <div class="lic-actions"><button class="btn-sm" onclick="editWarehouse(${Number(l.id)})">Set / remove warehouse</button>
         <button class="btn-sm" onclick="setArchived(${Number(l.id)},${!l.is_archived})">${l.is_archived?'Вернуть из архива':'В архив'}</button></div>
+      ${st==='active'||st==='trial'?`<div class="lic-actions" style="margin-top:8px"><button class="btn-sm" onclick="allowRecovery(${Number(l.id)})">Разрешить восстановление токена</button></div>`:''}
       ${actions?`<div class="divider"></div><div class="lic-actions">${actions}</div>`:''}
     </div>`;
   }).join('');
+}
+
+async function allowRecovery(id){
+  const l=licenses.find(item=>Number(item.id)===Number(id));
+  if(!l) return;
+  if(!confirm('Разрешить одноразовое восстановление токена на 10 минут?\n'+l.email+'\nПриложение: '+l.app_id+'\nУстройство: '+l.device_id+'\nПри восстановлении старый токен перестанет работать.')) return;
+  try{
+    const d=await api('/admin/license-recovery','POST',{id,ttl_minutes:10});
+    if(d.ok){
+      alert('Восстановление разрешено до '+new Date(d.recovery_allowed_until*1000).toLocaleString()+'. Запустите приложение на том же устройстве до этого времени.');
+      await loadLicenses();
+    }else showMsg(d.error||'Error','err');
+  }catch(e){showMsg(e.message,'err');}
 }
 
 async function setArchived(id,archived){

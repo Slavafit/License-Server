@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS licenses (
     app_name    TEXT DEFAULT '',
     warehouse_id TEXT,
     country_code TEXT,
+    recovery_allowed_until INTEGER, -- unix timestamp, NULL = recovery disabled
     token       TEXT NOT NULL UNIQUE,
     is_active   INTEGER DEFAULT 1,
     is_trial    INTEGER DEFAULT 0,   -- 1=триал, 0=полная лицензия

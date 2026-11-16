@@ -16,6 +16,7 @@ type LicenseRow = {
   id: number; token: string; app_id: string; device_id: string;
   is_active: number; is_trial: number; expires_at: number | null;
   warehouse_id: string | null; country_code: string | null;
+  recovery_allowed_until: number | null;
 };
 
 function country(value: unknown): string | null {
@@ -260,6 +261,7 @@ function dashboard(): Response {
 
 async function routeAdmin(request: Request, env: Env, path: string, method: string): Promise<Response> {
   if (path === "/admin/firestore/migrate-order-contents") return method === "POST" ? adminMigrateOrderContents(request, env) : methodNotAllowed("POST");
+  if (path === "/admin/license-recovery") return method === "POST" ? adminLicenseRecovery(request, env) : methodNotAllowed("POST");
   if (path === "/admin/archive") return method === "POST" ? adminArchive(request, env) : methodNotAllowed("POST");
   if (path === "/admin/warehouse") return method === "POST" ? adminWarehouse(request, env) : methodNotAllowed("POST");
   if (path === "/admin/create") return method === "POST" ? adminCreate(request, env) : methodNotAllowed("POST");
@@ -396,6 +398,26 @@ async function activate(request: Request, env: Env): Promise<Response> {
   ).bind(input.device_id, input.app_id).first<LicenseRow>();
 
   if (existing) {
+    if (!suppliedToken && existing.is_active &&
+        (existing.expires_at === null || existing.expires_at > now()) &&
+        existing.recovery_allowed_until != null && existing.recovery_allowed_until > now()) {
+      const token = generateToken();
+      // Compare-and-swap consumes the permission and rotates the token in one write.
+      // Database time checks validity at the write, not only at the initial read.
+      const recovered = await env.DB.prepare(
+        `UPDATE licenses SET token = ?, recovery_allowed_until = NULL
+         WHERE id = ? AND token = ? AND device_id = ? AND app_id = ?
+           AND is_active = 1 AND (expires_at IS NULL OR expires_at > unixepoch())
+           AND recovery_allowed_until > unixepoch()
+         RETURNING *`,
+      ).bind(token, existing.id, existing.token, input.device_id, input.app_id).first<LicenseRow>();
+      if (recovered) {
+        return licenseResponse(env, recovered, {
+          ok: true, token, status: recovered.is_trial ? "trial" : "active", expires_at: recovered.expires_at,
+        });
+      }
+      // A concurrent recovery, revocation or expiration must not reveal any token.
+    }
     if (!suppliedToken || !(await secureEqual(suppliedToken, existing.token))) {
       return json({ ok: false, reason: "already_registered", message: "This device is already registered. Verify with the stored token or contact support." }, 409);
     }
@@ -476,6 +498,28 @@ async function adminWarehouse(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, id: body.id, ...access });
 }
 
+async function adminLicenseRecovery(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  if (!isObject(body) || typeof body.id !== "number" || !Number.isSafeInteger(body.id) || body.id < 1) {
+    throw new ClientError("A positive integer id is required");
+  }
+  const ttlMinutes = positiveInteger(body.ttl_minutes, "ttl_minutes", 10) ?? 10;
+  const allowedUntil = now() + ttlMinutes * 60;
+  const license = await env.DB.prepare(
+    `UPDATE licenses SET recovery_allowed_until = ?
+     WHERE id = ? AND is_active = 1 AND (expires_at IS NULL OR expires_at > unixepoch())
+     RETURNING id, recovery_allowed_until`,
+  ).bind(allowedUntil, body.id).first<{ id: number; recovery_allowed_until: number }>();
+  if (!license) {
+    const existing = await env.DB.prepare("SELECT id FROM licenses WHERE id = ?").bind(body.id).first();
+    return existing ? err("License is revoked or expired", 409) : err("License not found", 404, "not_found");
+  }
+  await audit(request, env, "license.recovery_allowed", license.id, {
+    ttl_minutes: ttlMinutes, recovery_allowed_until: license.recovery_allowed_until,
+  });
+  return json({ ok: true, ...license });
+}
+
 // Archive is dashboard metadata only: public activation and verification ignore it.
 async function adminArchive(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
@@ -514,7 +558,7 @@ async function adminList(request: Request, env: Env): Promise<Response> {
   const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
   const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 100;
   let query = `SELECT id, email, device_id, app_id, app_name, substr(token, -4) AS token_last4,
-    is_active, is_trial, expires_at, created_at, warehouse_id, country_code,
+    is_active, is_trial, expires_at, created_at, warehouse_id, country_code, recovery_allowed_until,
     EXISTS (SELECT 1 FROM license_archive WHERE license_id = licenses.id) AS is_archived
     FROM licenses WHERE 1 = 1`;
   const params: Array<string | number> = [];

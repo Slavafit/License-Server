@@ -24,11 +24,11 @@ async function sql(db, text) {
   for (const statement of text.replace(/--[^\n]*/g, '').split(';').filter(s => s.trim())) await db.prepare(statement).run();
 }
 let ip = 0;
-async function api(mf, path, body, admin = false) {
+async function api(mf, path, body, admin = false, extraHeaders = {}) {
   const response = await mf.dispatchFetch(`https://local.test${path}`, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': `192.0.2.${++ip}`,
-      ...(admin ? { 'X-Admin-Key': bindings.ADMIN_KEY } : {}) },
+      ...(admin ? { 'X-Admin-Key': bindings.ADMIN_KEY } : {}), ...extraHeaders },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   return { status: response.status, data: await response.json() };
@@ -239,5 +239,188 @@ test('archive is reversible admin metadata and never changes license access', as
     const events = (await api(mf, '/admin/audit', undefined, true)).data.events;
     assert(events.some(e => e.action === 'license.archived' && e.license_id === stored.id));
     assert(events.some(e => e.action === 'license.unarchived' && e.license_id === stored.id));
+  } finally { await mf.dispose(); }
+});
+
+const recoveryPath = '/admin/license-recovery';
+const future = () => Math.floor(Date.now() / 1000) + 600;
+async function createRecoverable(mf, device = 'recover', extra = {}) {
+  const licenseInput = input(device, { warehouse_id: 'es-main', country_code: 'ES', expires_days: 30, ...extra });
+  const license = (await api(mf, '/admin/create', licenseInput, true)).data;
+  assert.equal(license.ok, true);
+  return { license, licenseInput };
+}
+
+test('recovery migration adds a nullable column without changing existing license data', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema.replace(/    recovery_allowed_until INTEGER[^\n]*\n/, ''));
+    await createRecoverable(mf);
+    const before = (await db.prepare('SELECT * FROM licenses').all()).results;
+    const migration = await readFile(new URL('../migrations/0005-license-recovery.sql', import.meta.url), 'utf8');
+    await sql(db, migration);
+    const after = (await db.prepare('SELECT * FROM licenses').all()).results;
+    assert.equal(after[0].recovery_allowed_until, null);
+    const { recovery_allowed_until, ...unchanged } = after[0];
+    assert.deepEqual(unchanged, before[0]);
+    await assert.rejects(sql(db, migration), /duplicate column/);
+  } finally { await mf.dispose(); }
+});
+
+test('admin recovery requires authorization, caps TTL at 10 minutes, and never returns or audits a token', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema);
+    const { license } = await createRecoverable(mf);
+    const request = { id: license.id, ttl_minutes: 10 };
+    assert.equal((await api(mf, recoveryPath, request)).status, 401);
+    assert.equal((await api(mf, recoveryPath, undefined, true)).status, 405);
+    for (const invalid of [0, -1, 11, 600, 1.5, '10', true]) {
+      assert.equal((await api(mf, recoveryPath, { ...request, ttl_minutes: invalid }, true)).status, 400);
+    }
+    for (const id of [0, -1, '21', 1.5]) {
+      assert.equal((await api(mf, recoveryPath, { ...request, id }, true)).status, 400);
+    }
+    assert.equal((await api(mf, recoveryPath, { id: 999, ttl_minutes: 10 }, true)).status, 404);
+    for (const ttl of [1, 10]) {
+      const start = Math.floor(Date.now() / 1000);
+      const result = await api(mf, recoveryPath, { id: license.id, ttl_minutes: ttl }, true);
+      assert.equal(result.status, 200);
+      assert.deepEqual(Object.keys(result.data).sort(), ['id', 'ok', 'recovery_allowed_until']);
+      assert(result.data.recovery_allowed_until >= start + ttl * 60);
+      assert(result.data.recovery_allowed_until <= Math.floor(Date.now() / 1000) + ttl * 60);
+    }
+    const list = (await api(mf, '/admin/licenses', undefined, true)).data;
+    assert(list.licenses[0].recovery_allowed_until > Math.floor(Date.now() / 1000));
+    assert(!JSON.stringify(list).includes(license.token));
+    const audit = (await api(mf, '/admin/audit', undefined, true)).data;
+    const events = audit.events.filter(e => e.action === 'license.recovery_allowed');
+    assert.equal(events.length, 2);
+    assert(events.every(e => e.license_id === license.id && !JSON.stringify(e).includes(license.token)));
+    assert.deepEqual(Object.keys(JSON.parse(events[0].details)).sort(), ['recovery_allowed_until', 'ttl_minutes']);
+    assert.equal((await db.prepare('SELECT token FROM licenses WHERE id = ?').bind(license.id).first()).token, license.token);
+  } finally { await mf.dispose(); }
+});
+
+test('one-time recovery rotates token, preserves es-main and license identity, and signs correct Firebase claims', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema);
+    const { license, licenseInput } = await createRecoverable(mf);
+    const before = await db.prepare('SELECT * FROM licenses WHERE id = ?').bind(license.id).first();
+    assert.equal((await api(mf, '/activate', licenseInput)).data.reason, 'already_registered');
+    await api(mf, recoveryPath, { id: license.id, ttl_minutes: 10 }, true);
+    // An explicitly wrong token cannot use the recovery path.
+    assert.equal((await api(mf, '/activate', { ...licenseInput, token: 'wrong-token' })).data.reason, 'already_registered');
+    // Contact email and country do not determine which license or warehouse is recovered.
+    const recovered = await api(mf, '/activate', { ...licenseInput, email: 'different@example.com', country_code: 'US' });
+    assert.equal(recovered.status, 200); assert.equal(recovered.data.status, 'active');
+    assert.match(recovered.data.token, /^[a-f0-9]{64}$/);
+    assert.notEqual(recovered.data.token, license.token);
+    assert.equal(recovered.data.warehouse_id, 'es-main'); assert.equal(recovered.data.country_code, 'ES');
+    const after = await db.prepare('SELECT * FROM licenses WHERE id = ?').bind(license.id).first();
+    assert.deepEqual(after, { ...before, token: recovered.data.token, recovery_allowed_until: null });
+    const jwt = decode(recovered.data.firebase_token);
+    assert.equal(jwt.uid, `license:${license.id}`);
+    assert.deepEqual(jwt.claims, { warehouse_id: 'es-main', country_code: 'ES', license_active: true,
+      license_expires_at: before.expires_at, license_id: license.id, app_id: licenseInput.app_id });
+    assert.equal((await api(mf, '/activate', licenseInput)).data.reason, 'already_registered');
+    assert.equal((await api(mf, '/activate', { ...licenseInput, token: license.token })).data.reason, 'already_registered');
+    const oldCheck = (await api(mf, '/verify', { ...licenseInput, token: license.token })).data;
+    assert.equal(oldCheck.reason, 'not_found'); ordinary(oldCheck);
+    assert.equal((await api(mf, '/verify', { ...licenseInput, token: recovered.data.token })).data.ok, true);
+    const existingActivation = (await api(mf, '/activate', { ...licenseInput, token: recovered.data.token })).data;
+    assert.equal(existingActivation.token, recovered.data.token);
+    assert.equal(existingActivation.warehouse_id, 'es-main');
+    const audit = (await api(mf, '/admin/audit', undefined, true)).data;
+    assert(!JSON.stringify(audit).includes(license.token)); assert(!JSON.stringify(audit).includes(recovered.data.token));
+  } finally { await mf.dispose(); }
+});
+
+test('permission is bound to exact device and app; matching email grants no recovery rights', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema);
+    const { license, licenseInput } = await createRecoverable(mf);
+    await createRecoverable(mf, 'other-device');
+    await createRecoverable(mf, 'recover', { app_id: 'other.app' });
+    await api(mf, recoveryPath, { id: license.id, ttl_minutes: 10 }, true);
+    for (const wrong of [{ ...licenseInput, device_id: 'other-device' }, { ...licenseInput, app_id: 'other.app' }]) {
+      const result = await api(mf, '/activate', wrong);
+      assert.equal(result.status, 409); assert.equal(result.data.reason, 'already_registered');
+      assert(!('token' in result.data)); ordinary(result.data);
+    }
+    // A genuinely new device still gets its ordinary isolated trial, never this license.
+    const newDevice = (await api(mf, '/activate', { ...licenseInput, device_id: 'brand-new' })).data;
+    assert.equal(newDevice.status, 'trial');
+    assert.match(newDevice.warehouse_id, /^license-\d+$/);
+    assert.notEqual(newDevice.token, license.token); assert.notEqual(newDevice.warehouse_id, 'es-main');
+    const unchanged = await db.prepare('SELECT token, recovery_allowed_until FROM licenses WHERE id = ?').bind(license.id).first();
+    assert.equal(unchanged.token, license.token); assert(unchanged.recovery_allowed_until > Math.floor(Date.now() / 1000));
+    assert.equal((await api(mf, '/activate', licenseInput)).data.ok, true);
+  } finally { await mf.dispose(); }
+});
+
+test('expired permissions and revoked or expired licenses cannot recover', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema);
+    const { license, licenseInput } = await createRecoverable(mf);
+    for (const until of [null, Math.floor(Date.now() / 1000) - 1, Math.floor(Date.now() / 1000)]) {
+      await db.prepare('UPDATE licenses SET recovery_allowed_until = ? WHERE id = ?').bind(until, license.id).run();
+      const result = await api(mf, '/activate', licenseInput);
+      assert.equal(result.data.reason, 'already_registered'); assert(!('token' in result.data));
+    }
+    for (const state of [
+      { is_active: 0, is_trial: 0, expires_at: future() },
+      { is_active: 1, is_trial: 0, expires_at: 1 },
+      { is_active: 1, is_trial: 1, expires_at: 1 },
+    ]) {
+      await db.prepare('UPDATE licenses SET is_active = ?, is_trial = ?, expires_at = ?, recovery_allowed_until = ? WHERE id = ?')
+        .bind(state.is_active, state.is_trial, state.expires_at, future(), license.id).run();
+      assert.equal((await api(mf, recoveryPath, { id: license.id, ttl_minutes: 10 }, true)).status, 409);
+      const result = await api(mf, '/activate', licenseInput);
+      assert.equal(result.data.reason, 'already_registered'); assert(!('token' in result.data));
+      assert.equal((await db.prepare('SELECT token FROM licenses WHERE id = ?').bind(license.id).first()).token, license.token);
+    }
+  } finally { await mf.dispose(); }
+});
+
+test('concurrent requests consume permission only once', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema);
+    const { license, licenseInput } = await createRecoverable(mf);
+    await api(mf, recoveryPath, { id: license.id, ttl_minutes: 10 }, true);
+    const results = await Promise.all(Array.from({ length: 8 }, () => api(mf, '/activate', licenseInput)));
+    const winners = results.filter(r => r.status === 200);
+    assert.equal(winners.length, 1);
+    assert(results.filter(r => r.status !== 200).every(r => r.status === 409 && r.data.reason === 'already_registered' && !('token' in r.data)));
+    const row = await db.prepare('SELECT token, recovery_allowed_until FROM licenses WHERE id = ?').bind(license.id).first();
+    assert.equal(row.token, winners[0].data.token); assert.equal(row.recovery_allowed_until, null);
+    assert.notEqual(row.token, license.token);
+  } finally { await mf.dispose(); }
+});
+
+test('ordinary and trial licenses recover with the original response format; rate limiting still applies', async () => {
+  const { mf, db } = await setup();
+  try {
+    await sql(db, schema);
+    const licenseInput = input('ordinary-recover', { app_id: 'normal.app' });
+    const created = (await api(mf, '/activate', licenseInput)).data;
+    const row = await db.prepare('SELECT * FROM licenses WHERE device_id = ?').bind(licenseInput.device_id).first();
+    await api(mf, recoveryPath, { id: row.id, ttl_minutes: 10 }, true);
+    const headers = { 'CF-Connecting-IP': '198.51.100.1' };
+    for (let i = 0; i < 5; i++) {
+      assert.equal((await api(mf, '/activate', { ...licenseInput, token: 'wrong' }, false, headers)).status, 409);
+    }
+    assert.equal((await api(mf, '/activate', licenseInput, false, headers)).status, 429);
+    assert((await db.prepare('SELECT recovery_allowed_until FROM licenses WHERE id = ?').bind(row.id).first()).recovery_allowed_until !== null);
+    const recovered = (await api(mf, '/activate', licenseInput)).data;
+    ordinary(recovered);
+    assert.deepEqual(Object.keys(recovered).sort(), ['expires_at', 'ok', 'status', 'token']);
+    assert.equal(recovered.status, 'trial'); assert.equal(recovered.expires_at, created.expires_at);
+    assert.notEqual(recovered.token, created.token);
+    assert.equal((await api(mf, '/verify', { ...licenseInput, token: recovered.token })).data.valid, true);
   } finally { await mf.dispose(); }
 });
