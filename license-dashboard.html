@@ -115,7 +115,8 @@ button:active{transform:scale(.97);background:var(--surface-1)}
       <div class="field" style="flex:1"><label>Target warehouse</label><input id="migration-target" value="es-main" maxlength="64"/></div>
     </div>
     <button class="btn-primary btn-full" id="migration-dry-run" onclick="runMigrationDryRun()"><i class="ti ti-eye"></i> Dry run (no copying)</button>
-    <div class="hint">Read-only preview. This panel cannot start real copying or delete source data.</div>
+    <button class="btn-success btn-full" id="migration-copy" onclick="runMigrationCopy()" style="margin-top:8px"><i class="ti ti-copy"></i> Copy missing documents</button>
+    <div class="hint">Copy never overwrites target documents and never deletes source data. Confirm the operation before it starts.</div>
     <div id="migration-result" class="migration-result"></div>
   </div>
 
@@ -252,14 +253,36 @@ async function runMigrationDryRun(){
   try{
     const data=await api('/admin/firestore/migrate-warehouse','POST',{source_warehouse:source,target_warehouse:target,dry_run:true});
     if(!data.ok){showMsg(data.error||'Dry run failed','err');result.innerHTML='';return;}
-    const rows=Object.entries(data.collections||{}).map(([name,item])=>`<tr>
-      <td>${escapeHtml(name)}</td><td>${Number(item.source_count||0)}</td><td>${Number(item.target_count||0)}</td>
-      <td>${Number(item.copy_count||0)}</td><td>${Number(item.skipped_existing||0)}</td></tr>`).join('');
-    result.innerHTML=`<table><thead><tr><th>Collection</th><th>Source</th><th>Target</th><th>Pending</th><th>Skipped</th></tr></thead><tbody>${rows}</tbody></table>`;
+    renderMigrationResult(data);
     showMsg('Dry run completed. No documents were changed.','ok');
   }catch(e){
     result.innerHTML='';
     showMsg('Dry run failed: '+e.message,'err');
+  }
+}
+
+function renderMigrationResult(data){
+  const rows=Object.entries(data.collections||{}).map(([name,item])=>`<tr>
+    <td>${escapeHtml(name)}</td><td>${Number(item.source_count||0)}</td><td>${Number(item.target_count||0)}</td>
+    <td>${Number(item.copy_count||0)}</td><td>${Number(item.skipped_existing||0)}</td></tr>`).join('');
+  document.getElementById('migration-result').innerHTML=`<table><thead><tr><th>Collection</th><th>Source</th><th>Target</th><th>Pending</th><th>Skipped</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function runMigrationCopy(){
+  const source=document.getElementById('migration-source').value.trim();
+  const target=document.getElementById('migration-target').value.trim();
+  const result=document.getElementById('migration-result');
+  if(!source||!target||source===target){showMsg('Enter different source and target warehouses','err');return;}
+  if(!confirm(`Copy all missing warehouse documents from ${source} to ${target}?\nExisting target documents will be skipped. Source data will not be deleted.`)) return;
+  result.innerHTML='<div class="empty"><i class="ti ti-loader"></i> Copying missing documents...</div>';
+  try{
+    const data=await api('/admin/firestore/migrate-warehouse','POST',{source_warehouse:source,target_warehouse:target,dry_run:false});
+    if(!data.ok){showMsg(data.error||'Copy failed','err');result.innerHTML='';return;}
+    renderMigrationResult(data);
+    showMsg('Copy completed. Run dry run again to verify Pending = 0.','ok');
+  }catch(e){
+    result.innerHTML='';
+    showMsg('Copy failed: '+e.message,'err');
   }
 }
 

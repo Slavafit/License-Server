@@ -313,9 +313,10 @@ document ID в назначении пропускаются, а исходны�
 `POST /admin/firestore/migrate-order-contents` сохранён для совместимости и
 обрабатывает только `order_contents`.
 
-В панели `/admin` есть блок **Firestore warehouse migration** с кнопкой
-**Dry run (no copying)**. Он показывает Source, Target, Pending и Skipped по
-каждой коллекции. Панель намеренно не содержит кнопки реального копирования.
+В панели `/admin` есть блок **Firestore warehouse migration**. Кнопка
+**Dry run (no copying)** показывает Source, Target, Pending и Skipped по каждой
+коллекции. **Copy missing documents** доступна только после подтверждения,
+передаёт `dry_run: false`, не заменяет документы назначения и не удаляет источник.
 
 ### Настройка и однократная миграция
 

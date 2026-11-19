@@ -70,7 +70,7 @@ test('cancelling recovery confirmation sends no request', async () => {
   assert.equal(page.alerts.length, 0);
 });
 
-test('migration panel can only send a dry-run request and renders collection counts', async () => {
+test('migration panel sends a dry-run request and renders collection counts', async () => {
   const page = panel(true);
   page.element('migration-source').value = 'license-22';
   page.element('migration-target').value = 'es-main';
@@ -82,5 +82,25 @@ test('migration panel can only send a dry-run request and renders collection cou
   });
   assert.match(page.element('migration-result').innerHTML, /shipments/);
   assert.match(page.element('migration-result').innerHTML, /<td>3<\/td><td>2<\/td>/);
-  assert(!html.includes('dry_run:false'));
+});
+
+test('confirmed migration copy sends dry_run false and keeps source and target explicit', async () => {
+  const page = panel(true);
+  page.element('migration-source').value = 'license-22';
+  page.element('migration-target').value = 'es-main';
+  await runInContext('runMigrationCopy()', page.context);
+  assert.equal(page.confirmations.length, 1);
+  assert.match(page.confirmations[0], /Source data will not be deleted/);
+  assert.equal(page.requests.length, 1);
+  assert.deepEqual(JSON.parse(page.requests[0].options.body), {
+    source_warehouse: 'license-22', target_warehouse: 'es-main', dry_run: false,
+  });
+});
+
+test('cancelled migration copy sends no request', async () => {
+  const page = panel(false);
+  page.element('migration-source').value = 'license-22';
+  page.element('migration-target').value = 'es-main';
+  await runInContext('runMigrationCopy()', page.context);
+  assert.equal(page.requests.length, 0);
 });
