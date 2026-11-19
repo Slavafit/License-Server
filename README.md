@@ -313,6 +313,10 @@ document ID в назначении пропускаются, а исходны�
 `POST /admin/firestore/migrate-order-contents` сохранён для совместимости и
 обрабатывает только `order_contents`.
 
+В панели `/admin` есть блок **Firestore warehouse migration** с кнопкой
+**Dry run (no copying)**. Он показывает Source, Target, Pending и Skipped по
+каждой коллекции. Панель намеренно не содержит кнопки реального копирования.
+
 ### Настройка и однократная миграция
 
 В `wrangler.toml` указан `FIREBASE_PROJECT_ID = "fastscan-pro-1816f"`.

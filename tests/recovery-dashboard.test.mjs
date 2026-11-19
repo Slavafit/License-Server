@@ -29,7 +29,11 @@ function panel(confirmed) {
       requests.push({ url, options });
       return { json: async () => url.endsWith('/admin/license-recovery')
         ? { ok: true, id: 21, recovery_allowed_until: until }
-        : { ok: true, licenses: [{ ...license, recovery_allowed_until: until }] } };
+        : url.endsWith('/admin/firestore/migrate-warehouse')
+          ? { ok: true, dry_run: true, collections: {
+            shipments: { source_count: 3, target_count: 2, copy_count: 1, skipped_existing: 2 },
+          } }
+          : { ok: true, licenses: [{ ...license, recovery_allowed_until: until }] } };
     },
   });
   runInContext(script, context);
@@ -64,4 +68,19 @@ test('cancelling recovery confirmation sends no request', async () => {
   assert.equal(page.confirmations.length, 1);
   assert.equal(page.requests.length, 0);
   assert.equal(page.alerts.length, 0);
+});
+
+test('migration panel can only send a dry-run request and renders collection counts', async () => {
+  const page = panel(true);
+  page.element('migration-source').value = 'license-22';
+  page.element('migration-target').value = 'es-main';
+  await runInContext('runMigrationDryRun()', page.context);
+  assert.equal(page.requests.length, 1);
+  assert.equal(page.requests[0].url, 'https://local.test/admin/firestore/migrate-warehouse');
+  assert.deepEqual(JSON.parse(page.requests[0].options.body), {
+    source_warehouse: 'license-22', target_warehouse: 'es-main', dry_run: true,
+  });
+  assert.match(page.element('migration-result').innerHTML, /shipments/);
+  assert.match(page.element('migration-result').innerHTML, /<td>3<\/td><td>2<\/td>/);
+  assert(!html.includes('dry_run:false'));
 });
