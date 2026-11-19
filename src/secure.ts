@@ -260,6 +260,7 @@ function dashboard(): Response {
 }
 
 async function routeAdmin(request: Request, env: Env, path: string, method: string): Promise<Response> {
+  if (path === "/admin/firestore/migrate-warehouse") return method === "POST" ? adminMigrateWarehouse(request, env) : methodNotAllowed("POST");
   if (path === "/admin/firestore/migrate-order-contents") return method === "POST" ? adminMigrateOrderContents(request, env) : methodNotAllowed("POST");
   if (path === "/admin/license-recovery") return method === "POST" ? adminLicenseRecovery(request, env) : methodNotAllowed("POST");
   if (path === "/admin/archive") return method === "POST" ? adminArchive(request, env) : methodNotAllowed("POST");
@@ -274,6 +275,23 @@ async function routeAdmin(request: Request, env: Env, path: string, method: stri
 }
 
 type FirestoreDocument = { name?: string; fields?: Record<string, unknown> };
+type FirestoreCollection = typeof FIRESTORE_WAREHOUSE_COLLECTIONS[number];
+type FirestoreMigrationResult = {
+  source_count: number;
+  target_count: number;
+  copy_count: number;
+  skipped_existing: number;
+};
+type FirestorePendingDocument = { document: FirestoreDocument & { fields: Record<string, unknown> }; id: string };
+
+const FIRESTORE_WAREHOUSE_COLLECTIONS = [
+  "shipments",
+  "box_entries",
+  "order_contents",
+  "box_inventory_reports",
+  "product_catalog",
+] as const;
+const FIRESTORE_WRITE_BATCH_SIZE = 400;
 
 async function firebaseAccessToken(env: Env): Promise<string> {
   if (!firebaseConfigured(env)) throw new ClientError("Firebase Admin is not configured", 503);
@@ -311,10 +329,10 @@ async function firebaseAccessToken(env: Env): Promise<string> {
   return result.access_token;
 }
 
-async function listFirestoreDocuments(env: Env, token: string, warehouseId: string): Promise<FirestoreDocument[]> {
+async function listFirestoreDocuments(env: Env, token: string, warehouseId: string, collection: FirestoreCollection): Promise<FirestoreDocument[]> {
   const project = encodeURIComponent(env.FIREBASE_PROJECT_ID!.trim());
   const warehouseIdEncoded = encodeURIComponent(warehouseId);
-  const base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/warehouses/${warehouseIdEncoded}/order_contents`;
+  const base = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/warehouses/${warehouseIdEncoded}/${collection}`;
   const documents: FirestoreDocument[] = [];
   let pageToken = "";
   do {
@@ -322,7 +340,7 @@ async function listFirestoreDocuments(env: Env, token: string, warehouseId: stri
     url.searchParams.set("pageSize", "300");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!response.ok) throw new ClientError("Could not read Firestore order contents", 502);
+    if (!response.ok) throw new ClientError(`Could not read Firestore collection: ${collection}`, 502);
     const result = await response.json() as { documents?: FirestoreDocument[]; nextPageToken?: string };
     documents.push(...(result.documents ?? []));
     pageToken = result.nextPageToken ?? "";
@@ -335,7 +353,66 @@ function firestoreDocumentId(document: FirestoreDocument): string | null {
   return id && !id.includes("/") ? id : null;
 }
 
+export function planFirestoreMigration(
+  sourceDocuments: FirestoreDocument[],
+  targetDocuments: FirestoreDocument[],
+): { pending: FirestorePendingDocument[]; result: FirestoreMigrationResult } {
+  const targetIds = new Set(targetDocuments.map(firestoreDocumentId).filter((id): id is string => Boolean(id)));
+  const sourceWithIds = sourceDocuments
+    .map(document => ({ document, id: firestoreDocumentId(document) }))
+    .filter((item): item is FirestorePendingDocument => Boolean(item.id && item.document.fields));
+  const pending = sourceWithIds.filter(({ id }) => !targetIds.has(id));
+  return {
+    pending,
+    result: {
+      source_count: sourceDocuments.length,
+      target_count: targetDocuments.length,
+      copy_count: pending.length,
+      skipped_existing: sourceWithIds.length - pending.length,
+    },
+  };
+}
+
+export async function copyFirestoreDocuments(
+  env: Env,
+  token: string,
+  target: string,
+  collection: FirestoreCollection,
+  pending: FirestorePendingDocument[],
+  commit: typeof fetch = fetch,
+): Promise<void> {
+  const project = encodeURIComponent(env.FIREBASE_PROJECT_ID!.trim());
+  const commitUrl = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents:commit`;
+  for (let offset = 0; offset < pending.length; offset += FIRESTORE_WRITE_BATCH_SIZE) {
+    const writes = pending.slice(offset, offset + FIRESTORE_WRITE_BATCH_SIZE).map(({ document, id }) => ({
+      update: {
+        name: `projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/warehouses/${target}/${collection}/${id}`,
+        fields: document.fields,
+      },
+      currentDocument: { exists: false },
+    }));
+    const response = await commit(commitUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ writes }),
+    });
+    if (!response.ok) throw new ClientError(`Could not copy Firestore collection: ${collection}`, 502);
+  }
+}
+
 async function adminMigrateOrderContents(request: Request, env: Env): Promise<Response> {
+  return migrateFirestoreWarehouse(request, env, ["order_contents"]);
+}
+
+async function adminMigrateWarehouse(request: Request, env: Env): Promise<Response> {
+  return migrateFirestoreWarehouse(request, env, FIRESTORE_WAREHOUSE_COLLECTIONS);
+}
+
+async function migrateFirestoreWarehouse(
+  request: Request,
+  env: Env,
+  collections: readonly FirestoreCollection[],
+): Promise<Response> {
   const body = await readJson(request);
   if (!isObject(body)) throw new ClientError("JSON object required");
   const source = warehouse(body.source_warehouse).warehouse_id;
@@ -343,48 +420,38 @@ async function adminMigrateOrderContents(request: Request, env: Env): Promise<Re
   if (!source || !target || source === target) throw new ClientError("Different source_warehouse and target_warehouse are required");
   const dryRun = body.dry_run !== false;
   const token = await firebaseAccessToken(env);
-  const [sourceDocuments, targetDocuments] = await Promise.all([
-    listFirestoreDocuments(env, token, source),
-    listFirestoreDocuments(env, token, target),
-  ]);
-  const targetIds = new Set(targetDocuments.map(firestoreDocumentId).filter((id): id is string => Boolean(id)));
-  const pending = sourceDocuments.filter(document => {
-    const id = firestoreDocumentId(document);
-    return Boolean(id && !targetIds.has(id) && document.fields);
-  });
-  if (!dryRun && pending.length) {
-    const project = encodeURIComponent(env.FIREBASE_PROJECT_ID!.trim());
-    const commitUrl = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents:commit`;
-    for (let offset = 0; offset < pending.length; offset += 450) {
-      const writes = pending.slice(offset, offset + 450).map(document => ({
-        update: {
-          name: `projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/warehouses/${target}/order_contents/${firestoreDocumentId(document)}`,
-          fields: document.fields,
-        },
-        currentDocument: { exists: false },
-      }));
-      const response = await fetch(commitUrl, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ writes }),
-      });
-      if (!response.ok) throw new ClientError("Could not copy Firestore order contents", 502);
+  const results: Partial<Record<FirestoreCollection, FirestoreMigrationResult>> = {};
+  let copiedTotal = 0;
+  for (const collection of collections) {
+    const [sourceDocuments, targetDocuments] = await Promise.all([
+      listFirestoreDocuments(env, token, source, collection),
+      listFirestoreDocuments(env, token, target, collection),
+    ]);
+    const { pending, result } = planFirestoreMigration(sourceDocuments, targetDocuments);
+
+    if (!dryRun && pending.length) {
+      await copyFirestoreDocuments(env, token, target, collection, pending);
     }
-    await audit(request, env, "firestore.order_contents_migrated", null, {
+
+    copiedTotal += dryRun ? 0 : pending.length;
+    results[collection] = result;
+  }
+  if (!dryRun && copiedTotal > 0) {
+    await audit(request, env, "firestore.warehouse_migrated", null, {
       source_warehouse: source,
       target_warehouse: target,
-      copied: pending.length,
+      collections: results,
+      copied: copiedTotal,
     });
   }
+  const legacyResult = collections.length === 1 ? results[collections[0]] : undefined;
   return json({
     ok: true,
     dry_run: dryRun,
     source_warehouse: source,
     target_warehouse: target,
-    source_count: sourceDocuments.length,
-    target_count: targetDocuments.length,
-    copy_count: pending.length,
-    skipped_existing: sourceDocuments.length - pending.length,
+    collections: results,
+    ...(legacyResult ?? {}),
   });
 }
 

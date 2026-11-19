@@ -293,18 +293,25 @@ Firebase Security Rules должны проверять точный подпи�
 действия и серверного механизма отзыва, если нужен немедленный отзыв доступа.
 Одни claims не аннулируют уже открытую сессию.
 
-### Перенос составов между складами
+### Перенос данных между складами
 
-После административной смены `warehouse_id` сохранённые составы можно безопасно
-скопировать через `POST /admin/firestore/migrate-order-contents`. По умолчанию
-выполняется только проверка; существующие документы назначения не заменяются,
-исходные документы не удаляются.
+После административной смены `warehouse_id` складские данные можно безопасно
+скопировать через `POST /admin/firestore/migrate-warehouse`. Маршрут обрабатывает
+`shipments`, `box_entries`, `order_contents`, `box_inventory_reports` и
+`product_catalog`. По умолчанию выполняется только проверка; существующие
+document ID в назначении пропускаются, а исходные документы никогда не удаляются.
 
 ```json
-{"source_warehouse":"license-19","target_warehouse":"es-main","dry_run":true}
+{"source_warehouse":"license-22","target_warehouse":"es-main","dry_run":true}
 ```
 
-Для копирования передайте `"dry_run": false`. Маршрут требует `X-Admin-Key`.
+Ответ содержит `source_count`, `target_count`, `copy_count` и
+`skipped_existing` отдельно для каждой коллекции. Для копирования передайте
+`"dry_run": false`; записи выполняются безопасными пакетами с условием
+`exists: false`, поэтому существующие документы не перезаписываются. Маршрут
+требует `X-Admin-Key`. Старый маршрут
+`POST /admin/firestore/migrate-order-contents` сохранён для совместимости и
+обрабатывает только `order_contents`.
 
 ### Настройка и однократная миграция
 

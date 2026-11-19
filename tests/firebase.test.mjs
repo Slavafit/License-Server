@@ -55,7 +55,9 @@ function ordinary(data) {
 test('fresh local D1 schema and one-time legacy migration', async () => {
   const { mf, db } = await setup();
   try {
-    const legacy = schema.replace('    warehouse_id TEXT,\n    country_code TEXT,\n', '').replace('CREATE INDEX IF NOT EXISTS idx_warehouse ON licenses(warehouse_id);', '');
+    const legacy = schema
+      .replace(/    warehouse_id TEXT,\r?\n    country_code TEXT,\r?\n/, '')
+      .replace('CREATE INDEX IF NOT EXISTS idx_warehouse ON licenses(warehouse_id);', '');
     await sql(db, legacy);
     await sql(db, `INSERT INTO licenses(email, device_id, app_id, token, created_at) VALUES
       ('a@example.com','one','com.ocr.fastscan','one',1), ('b@example.com','two','other.app','two',1);`);
